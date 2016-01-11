@@ -58,7 +58,7 @@ Erlang [raft consensus protocol](https://raftconsensus.github.io) implementation
 
 部分参数说明：
 > - "**election_timeout**" - **`Follower`** 发起新一轮选举所需的超时时间（以毫秒为单位，默认为 500 毫秒）
-> - "**request_timeout**" - **`Leader`** 等待来自 Follower 的复制成功 RPC 应答的超时事件（以毫秒为单位，默认为 *2*election_timeout*）
+> - "**request_timeout**" - **`Leader`** 等待来自 Follower 的复制成功 RPC 应答的超时事件（以毫秒为单位，默认为 2*election_timeout）
 > - "**snapshot_listener_port**" - 用于快照传输的默认端口（即监听端口，设置为 0 表示可以使用任意空闲端口）
 > - "**snapshot_listener_addr**" - 用于快照传输的绑定地址（即监听地址）
 > - "**snapshot_backup**" - 如果打开该选项，则全部快照将会被归档

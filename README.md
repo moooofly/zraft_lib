@@ -1,6 +1,14 @@
 # zraft_lib
 
+
+----------
+
+
 Erlang [raft consensus protocol](https://raftconsensus.github.io) implementation .
+
+
+----------
+
 
 特性支持：
 > - 运行时成员关系的重配置
@@ -13,9 +21,17 @@ Erlang [raft consensus protocol](https://raftconsensus.github.io) implementation
 > - 临时数据维护（如临时节点一般）
 > - 数据变更触发器
 
+
+----------
+
+
 ## Erlang 架构
 
 ![schema](docs/img/schema.png?raw=true)
+
+
+----------
+
 
 ## 通用配置
 
@@ -67,6 +83,10 @@ Erlang [raft consensus protocol](https://raftconsensus.github.io) implementation
 > - "**max_segment_size**" - 以字节为单位的日志块最大尺寸（若达到该尺寸限制则创建新的日志文件块）
 > - "**max_log_count**" - 每当达到 "max_log_count" 个条目时，将会自动启动快照/日志切割处理
 
+
+----------
+
+
 ## 创建并配置 RAFT 集群
 
 ```
@@ -85,9 +105,12 @@ zraft_client:create(Peers,BackEnd).
  - `{error,Reason}` - 集群已经被创建，但是新配置在被应用时由于 "Reason" 原因失败了
 
 
+----------
+
+
 ## 基本操作
 
-#### Light Session Object.
+### Light Session Object.
 
 Light session object 用于跟踪当前 raft 集群状态，例如，leader 状态，失效 peers 状态，等等...
 
@@ -115,7 +138,8 @@ zraft_client:light_session(PeersList,FailTimeout,ElectionTimeout).
 
 该函数不会尝试从集群中读取配置信息
 
-#### 写操作
+
+### 写操作
 
 ```
 zraft_client:write(PeerID,Data,Timeout).
@@ -149,11 +173,10 @@ zraft_client:write(LightSessionObj,Data,Timeout).
 警告：在该请求被执行期间，Data 可能会作用到 backend 模块上两次
 ```
 
-#### 读请求
+### 读请求
 
 ```
 zraft_client:query(PeerID,Query,Timeout).
-
 ```
 
 参数说明：
@@ -176,11 +199,15 @@ zraft_client:query(LaghtSessionObj,Query,Timeout).
 - `{error,Error}` - 执行失败。典型原因为 timeout 或者 all_failed ；`all_failed` 意味着不存在处于 alive 状态的 peer
 
 
-#### 配置变更
+### 配置变更
 
 ```
 zraft_client:set_new_conf(Peer,NewPeers,OldPeers,Timeout).
 ```
+
+
+----------
+
 
 ## 会话的用途
 
@@ -194,7 +221,7 @@ zraft_session:start_link(PeerOrPeers,SessionTimeout)->{ok,Session}.
 If first parameter is PeerID other available Peer will be readed from that Peer.
 如果第一个参数为 PeerID ，那么其他 Peer 将从该 Peer 读取xx
 
-#### 针对 Data 和 Ephemeral data 的写
+### 针对 Data 和 Ephemeral data 的写
 
 ```
 zraft_session:write(Session,Data, Temporary, Timeout).
@@ -202,7 +229,7 @@ zraft_session:write(Session,Data, Temporary, Timeout).
 If Temporary is true then data will be deleted after session wil be expired.
 如果设置 Temporary 为 true ，那么 data 将会在会话过期后被删除
 
-#### 针对 Data 的读以及 watcher 设置
+### 针对 Data 的读以及 watcher 设置
 
 ```
 zraft_session:query(Session,Query,Watch,Timeout).
@@ -225,11 +252,17 @@ zraft_session:query(S1,1,my_watcher,1000). %%watch again
 ```
 
 
+----------
+
+
 ##Standalone Server.
 
 You can use it for tests from erlang console.
 
 https://github.com/dreyk/zraft
+
+
+----------
 
 
 ## TODO:

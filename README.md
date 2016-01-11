@@ -127,8 +127,8 @@ zraft_client:write(PeerID,Data,Timeout).
 > - `Data` - 与 BackEnd 模块相对应的的请求数据
 
 可能的返回值：
-> - `{Result,LeaderPeerID}` - 将请求 Data 作用到 BackEnd 模块后得到的结果；LeaderPeerID 为集群中当前的 leader ID
-> - `{error,Error}` - 执行失败。典型原因为 timeout 或者 noproc
+- `{Result,LeaderPeerID}` - 将请求 Data 作用到 BackEnd 模块后得到的结果；LeaderPeerID 为集群中当前的 leader ID
+- `{error,Error}` - 执行失败。典型原因为 timeout 或者 noproc
 
 
 通过 session object 进行写
@@ -142,8 +142,8 @@ zraft_client:write(LightSessionObj,Data,Timeout).
 > - `Data` - 与 BackEnd 模块相对应的的请求数据
 
 可能的返回值：
-> - `{Result,LightSessionObj}` - 将请求 Data 作用到 BackEnd 模块后得到的结果；LeaderPeerID 为集群中当前的 leader ID
-> - `{error,Error}` - 执行失败。典型原因为 timeout 或者 all_failed ；`all_failed` 意味着不存在处于 alive 状态的 peer
+- `{Result,LightSessionObj}` - 将请求 Data 作用到 BackEnd 模块后得到的结果；LeaderPeerID 为集群中当前的 leader ID
+- `{error,Error}` - 执行失败。典型原因为 timeout 或者 all_failed ；`all_failed` 意味着不存在处于 alive 状态的 peer
 
 ```
 警告：在该请求被执行期间，Data 可能会作用到 backend 模块上两次
@@ -161,8 +161,8 @@ zraft_client:query(PeerID,Query,Timeout).
 > - `Query` - Request Data specific for backend module.
 
 可能的返回值：
-> - `{Result,LeaderPeerID}` - Result 为查询的结果；LeaderPeerID 为当前的 leader ID
-> - `{error,Error}` - 执行失败。典型原因为 timeout 或者 noproc
+- `{Result,LeaderPeerID}` - Result 为查询的结果；LeaderPeerID 为当前的 leader ID
+- `{error,Error}` - 执行失败。典型原因为 timeout 或者 noproc
 
 
 或者基于 light session object 读取数据：
@@ -172,8 +172,8 @@ zraft_client:query(LaghtSessionObj,Query,Timeout).
 ```
 
 可能的返回值：
-> - `{Result,LightSessionObj}` - Result 为查询的结果；LightSessionObj 为被更新的 session object
-> - `{error,Error}` - 执行失败。典型原因为 timeout 或者 all_failed ；`all_failed` 意味着不存在处于 alive 状态的 peer
+- `{Result,LightSessionObj}` - Result 为查询的结果；LightSessionObj 为被更新的 session object
+- `{error,Error}` - 执行失败。典型原因为 timeout 或者 all_failed ；`all_failed` 意味着不存在处于 alive 状态的 peer
 
 
 #### 配置变更

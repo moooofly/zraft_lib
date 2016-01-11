@@ -47,12 +47,16 @@
     format/2
 ]).
 
+%% 将当前系统时间换算成 ms 表示的时间
 now_millisec()->
    {Mega,S,Micro} = os:timestamp(),
    (Mega*1000000+S)*1000+(Micro div 1000).
+
+%% 将指定时间换算成 ms 表示的时间
 timestamp_millisec({Mega,S,Micro})->
     (Mega*1000000+S)*1000+(Micro div 1000).
 
+%% 生成 peer 的名字字符串
 peer_name({Name,Node}) when is_atom(Name)->
     atom_to_list(Name)++"-"++node_name(Node);
 peer_name({Name,Node})->
@@ -61,6 +65,7 @@ peer_name({Name,Node})->
 node_name(Node)->
     escape_node(atom_to_list(Node)).
 
+%% 将 Node 中的 @ 和 . 转成 _
 escape_node([])->
     [];
 escape_node([$@|T])->

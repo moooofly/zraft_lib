@@ -864,7 +864,9 @@ load_meta(FS = #fs{peer_dir = Dir,peer_id = ID}) ->
                                                               end,
     FS#fs{meta_version = V, first_index = Index, raft_meta = RaftMeta}.
 
+%% 读取 raft 元数据文件的内容
 read_meta_file(FileName) ->
+    %% [Note] 读取量问题
     case file:read_file(FileName) of
         {ok, Data} ->
             case catch binary_to_term(Data) of
@@ -1039,6 +1041,8 @@ make_snapshot_info(Index,
     end,
     #snapshot_info{term = Term, index = Index, conf = Conf, conf_index = ConfIndex}.
 
+%% 读取对应一个 peer 的 raft 元数据
+%% [Note] meta1 和 meta2 分别对应了什么？
 load_raft_meta(Dir) ->
     case read_meta_file(filename:join(Dir, "meta2.info")) of
         #meta{version = V1}=M1 ->

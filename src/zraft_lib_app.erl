@@ -35,7 +35,8 @@ stop(_State) ->
     ok.
 
 
-%%Start in test console
+%% Start in test console
 start()->
-    spawn(fun()->
-        ok = zraft_util:start_app(zraft_lib) end).
+    spawn(
+        fun()-> ok = zraft_util:start_app(zraft_lib) end
+    ).

@@ -96,7 +96,7 @@
 -define(WARNING(State, S, As), ?MWARNING("~p: " ++ S, [print_id(State) | As])).
 -define(WARNING(State, S), ?MWARNING("~p: " ++ S, [print_id(State)])).
 
-
+%% election_timeout 默认值为 500 ms
 -define(ETIMEOUT, zraft_util:get_env(?ELECTION_TIMEOUT_PARAM, ?ELECTION_TIMEOUT)).
 
 -record(init_state, {log, fsm, id, back_end, snapshot_info, async, bootstrap = false}).
@@ -206,9 +206,12 @@ set_new_configuration(PeerID, PrevID, Peers, Timeout) ->
 
 stat(Peer) ->
     gen_fsm:sync_send_all_state_event(Peer, stat).
+
+
 %%%===================================================================
 %%% Internal Server API
 %%%===================================================================
+
 -spec get_election_timeout() -> timeout().
 get_election_timeout() ->
     ?ETIMEOUT.
@@ -639,6 +642,8 @@ handle_sync_event(#conf_change_requet{}, _From, StateName, State) ->
     %%Lost lidership
     %%Hint new leader in respose
     {reply, {leader, current_leader(State)}, StateName, State};
+
+
 %%%===================================================================
 %%% JUST FOR TESTS
 %%%===================================================================

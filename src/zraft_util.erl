@@ -89,10 +89,12 @@ get_env(Key, Default) ->
 -spec random(pos_integer()) -> pos_integer().
 random(N) ->
     erlang:phash2(erlang:statistics(io), N).
+%% 增加自定义前缀的版本
 -spec random(term(),pos_integer()) -> pos_integer().
 random(Prefix,N) ->
     erlang:phash2({Prefix,erlang:statistics(io)}, N).
 
+%% 删除目录及其下的所有内容
 del_dir(Dir)->
     case del_dir1(Dir) of
         {error,enoent}->
@@ -104,15 +106,18 @@ del_dir(Dir)->
     end.
 del_dir1(Dir) ->
     case file:list_dir(Dir) of
-        {ok, Files} ->
+        {ok, Files} ->  %% 对应 Dir 为目录的情况
             lists:foreach(fun(F) ->
                 del_dir1(filename:join(Dir, F)) end, Files),
+            %% 删除目录（要求目录下面必须为空）
             file:del_dir(Dir);
-        _ ->
+        _ ->    %% 对应 enoent（Dir 不存在） | enotdir（Dir 为文件） | eacces（权限不足） 的情况
+            %% [Note] 这里不管是文件还是目录，直接进行了删除处理
             file:delete(Dir),
             file:del_dir(Dir)
     end.
 
+%% 创建目录 Dir（自动创建目录层级中缺失的部分）
 make_dir(undefined)->
     exit({error,dir_undefined});
 make_dir("undefined"++_)->
@@ -121,37 +126,42 @@ make_dir(Dir) ->
     case make_safe(Dir) of
         ok ->
             ok;
-        {error, enoent} ->
+        {error, enoent} ->  %% 创建目录层级中不存在的部分
             S1 = filename:split(Dir),
             S2 = lists:droplast(S1),
             case make_dir(filename:join(S2)) of
                 ok ->
                     make_safe(Dir);
-                Else ->
+                Else -> %% 无法处理的错误 eacces | enospc | enotdir
                     Else
             end;
-        Else ->
+        Else -> %% 无法处理的错误 eacces | enospc | enotdir
             Else
     end.
 make_safe(Dir)->
+    %% 创建目录，若创建具有多级目录结构的目录，则要求所有父目录都存在
     case file:make_dir(Dir) of
         ok->
             ok;
-        {error,eexist}->
+        {error,eexist}->    %% 已存在名为 Dir 的目录
             ok;
-        Else->
-            Else
+        Else->      %% eacces（权限不足） | enoent（目录层级中有不存在的部分） | 
+            Else    %% enospc（空间不足） | enotdir（目录层级中有不是目录的部分）
     end.
 
 %% Based on: https://github.com/rabbitmq/rabbitmq-server/blob/master/src/rabbit_queue_index.erl#L542
+%% 获取由 36 进制字符构成的原子
 peer_name_to_dir_name(PeerId) ->
+    %% 这里得到的 Num 将是一个超大整数值
     <<Num:128>> = erlang:md5(term_to_binary(PeerId)),
+    %% 以 36 进制格式化 Num 值
     list_to_atom(format("~.36B", [Num])).
 
 %% Taken from: https://github.com/rabbitmq/rabbitmq-server/blob/master/src/rabbit_misc.erl#L649
 format(Fmt, Args) ->
     lists:flatten(io_lib:format(Fmt, Args)).
 
+%% 获取节点名对应的地址
 node_addr(Node)->
     L = atom_to_list(Node),
     case string:tokens(L,"@") of
@@ -163,6 +173,7 @@ node_addr(Node)->
             "127.0.0.1"
     end.
 
+%% [Note] 单词拼写错误？
 miscrosec_timeout(Timeout) when is_integer(Timeout)->
     Timeout*1000;
 miscrosec_timeout(Timeout)->
@@ -184,6 +195,7 @@ gen_server_cancel_timer(Ref)->
 peer_id({ID,_})->
     ID.
 
+%% 测试函数
 
 set_test_dir(Dir)->
     del_dir(Dir),
@@ -217,6 +229,7 @@ cycle_exp(Start,T)->
             cycle_exp(os:timestamp(),T1)
     end.
 
+%% 应用启动（递归启动依赖应用）
 start_app(App)->
     start_app(App,ok).
 start_app(App,ok) ->
@@ -233,6 +246,7 @@ start_app(App,ok) ->
 start_app(_,Error) ->
     Error.
 
+%% [Note] 用途？
 count_list([])->
     [];
 count_list([{E1,C1}|T])->

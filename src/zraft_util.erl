@@ -85,6 +85,7 @@ get_env(Key, Default) ->
     end.
 
 %% @doc Generate "random" number X, such that `0 <= X < N'.
+%% 生成一个比 0 大但比 N 小的随机数
 -spec random(pos_integer()) -> pos_integer().
 random(N) ->
     erlang:phash2(erlang:statistics(io), N).

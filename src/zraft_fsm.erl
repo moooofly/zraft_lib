@@ -44,9 +44,11 @@
 -include("zraft.hrl").
 
 -define(SNAPSHOT_HEADER_VERIOSN, 1).
+%% 快照文件保存目录
 -define(DATA_DIR, zraft_util:get_env(snapshot_dir, "data")).
-
+%% 触发快照/日志切割的 entry 阈值
 -define(MAX_COUNT, zraft_util:get_env(max_log_count, 1000)).
+%% 快照是否归档
 -define(SNAPSHOT_BACKUP, zraft_util:get_env(snapshot_backup, false)).
 
 -define(INFO(State, S, As), ?MINFO("~p: " ++ S, [print_id(State) | As])).
@@ -60,8 +62,8 @@
 
 
 -record(state, {
-    raft,
-    raft_state = follower,
+    raft,                   %% zraft_consensus:from_peer_addr() -> {{peer_name(), node()}, pid()}
+    raft_state = follower,  %% Raft 的三种状态 leader | follower | candidate
     sessions,
     watchers,
     monitors,
@@ -70,24 +72,26 @@
     last_index = 0,
     last_snapshot_index = 0,
     log_count = 0,
-    max_count,
+    max_count,              %% 触发快照/日志切割的 entry 阈值，默认 1000
     active_snapshot,
     dir,
     snapshot_count = 0,
     last = 0,
     last_dir = [],
     prev_snapshot}).
+
 -record(snapshoter, {pid, seq, last_index, dir, mref, log_count, file, type, from}).
 
 -spec start_link(zraft_consensus:from_peer_addr(), module()) -> {ok, pid()} | {error, term()}.
-
 start_link(Raft, BackEnd) ->
     gen_server:start_link(?MODULE, [Raft, BackEnd], []).
 
+%% 设置 Raft 状态
 -spec set_state(pid(), atom()) -> ok.
 set_state(P, StateName) ->
     gen_server:cast(P, {set_state, StateName}).
 
+%% 日志分发处理
 -spec apply_commit(pid(), list(#entry{})) -> ok.
 apply_commit(P, Entries) ->
     gen_server:cast(P, {append, Entries}).
@@ -100,6 +104,7 @@ stop(P) ->
 cmd(FSM, Request) ->
     gen_server:cast(FSM, Request).
 
+%% 状态查询
 -spec stat(pid())->#fsm_stat{}.
 stat(P)->
     gen_server:call(P,stat).
@@ -114,10 +119,14 @@ init([Raft, BackEnd]) ->
     {ok, State}.
 
 delayed_init(State = #state{raft = Raft}) ->
+    %% PeerID -> {atom(), node()}
     PeerID = zraft_util:peer_id(Raft),
+    %% 生成 36 进制字符串构成的原子（区分每个 peer 的目录）
     PeerDirName = zraft_util:peer_name_to_dir_name(zraft_util:peer_name(PeerID)),
-    Dir = filename:join([?DATA_DIR,PeerDirName, "snapshots"]),
+    %% 完整目录，类似 ./data/1234567890ABCXYZ/snapshots/
+    Dir = filename:join([?DATA_DIR, PeerDirName, "snapshots"]),
     ok = zraft_util:make_dir(Dir),
+    %% 由于理论上讲存在目录重名的情况（几乎不会出现），创建后先清空
     Seq = clean_dir(Dir),
     WatchersTable = ets:new(watcher_table_name(State), [bag, {write_concurrency, false}, {read_concurrency, false}]),
     State1 = install_snapshot(State#state{
@@ -471,19 +480,24 @@ expire_session_data(From, BackEnd, Ustate, State = #state{sessions = Sessions, m
     trigger_watchers(ExpiredKeys, State),
     UState1.
 
+%% 清理指定目录，类似 ./data/1234567890ABCXYZ/snapshots/
+%% 目录下可能存在的文件为
+%% 1. snapshot-0, snapshot-1,...
+%% 2. archive-0, archive-1,...
 clean_dir(Dir) ->
     {ok, Files} = file:list_dir(Dir),
     Last = lists:foldl(fun(F, Acc) ->
-        FName = filename:join(Dir, F),
-        case F of
-            "snapshot-" ++ N ->
-                last_snapshot(get_index(N), Acc);
-            "archive-" ++ N ->
-                last_snapshot(get_index(N), Acc);
-            _ ->
-                zraft_util:del_dir(FName),
-                Acc
-        end end, 0, Files),
+                            FName = filename:join(Dir, F),
+                            case F of
+                                "snapshot-" ++ N -> %% 快照文件
+                                    last_snapshot(get_index(N), Acc);
+                                "archive-" ++ N ->  %% 归档文件
+                                    last_snapshot(get_index(N), Acc);
+                                _ ->    %% 目录
+                                    zraft_util:del_dir(FName),
+                                    Acc
+                            end 
+                        end, 0, Files),
     delelte_old(Last, Dir),
     Last.
 
@@ -840,21 +854,28 @@ reply_caller(undeined, _) ->
 reply_caller(From, Msg) ->
     zraft_consensus:reply_caller(From, Msg).
 
+
+%% Raft 角色变更处理
+
+%% 未发生角色变更
 change_raft_state(RaftState, State = #state{raft_state = RaftState}) ->
     {noreply, State};
+%% 从 leader 切换为非 leader
 change_raft_state(NewRaftState, State = #state{raft_state = leader, watchers = W, monitors = M})
     when NewRaftState /= leader ->
     trigger_all_watchers(State),
     ets:delete_all_objects(W),
     ets:foldl(fun(O, Acc) ->
-        case O of
-            {From, MRef, _, _} ->
-                demonitor_session(MRef),
-                ets:update_element(M, From, {2, undefined});
-            _->
-                ok
-        end, Acc end, 0, M),
+                case O of
+                    {From, MRef, _, _} ->
+                        demonitor_session(MRef),
+                        ets:update_element(M, From, {2, undefined});
+                    _->
+                        ok
+                end, Acc 
+            end, 0, M),
     {noreply, State#state{raft_state = NewRaftState}};
+%% 从非 leader 切换为 leader
 change_raft_state(leader, State = #state{monitors = M, raft = Raft}) ->
     NewLeader = zraft_util:peer_id(Raft),
     upgrade_monitors(State#state.monitors),

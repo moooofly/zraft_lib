@@ -73,8 +73,9 @@
 -define(SYNC_LEADER_DIRTY_MODE,leader_dirty).
 -define(SYNC_DIRTY_MODE,dirty).
 
--define(MAX_SEGMENT_SIZE, zraft_util:get_env(max_segment_size, 10485760)).%%10 MB
--define(SYNC_MODE,zraft_util:get_env(log_sync_mode,?SYNC_DEFAULT_MODE)).%%avaible options: default,dirty,leader_dirty
+-define(MAX_SEGMENT_SIZE, zraft_util:get_env(max_segment_size, 10485760)).  %% 10 MB
+%% 日志同步模式
+-define(SYNC_MODE,zraft_util:get_env(log_sync_mode,?SYNC_DEFAULT_MODE)).    %% avaible options: default,dirty,leader_dirty
 -define(READ_BUFFER_SIZE, 1048576).%%1MB
 -define(SERVER, ?MODULE).
 
@@ -118,6 +119,7 @@
 max_segment_size() ->
     ?MAX_SEGMENT_SIZE.
 
+%% 获取 raft 元数据
 get_raft_meta(FS) ->
     gen_server:call(FS, {get, #fs.raft_meta}).
 
@@ -174,12 +176,17 @@ start_link(PeerID) ->
     gen_server:start_link(?MODULE, [PeerID], []).
 
 init([PeerID]) ->
+    %% 异步初始化
     gen_server:cast(self(), {init, PeerID}),
+    %% [Note] 加载中
     {ok, loading}.
 
+%% ???
 load_fs(PeerID) ->
     PeerDirName = zraft_util:peer_name_to_dir_name(zraft_util:peer_name(PeerID)),
+    %% data/629EWAR87JDBH7W4R88E3MWTA
     PeerDir = filename:join([?DATA_DIR, PeerDirName]),
+    %% data/629EWAR87JDBH7W4R88E3MWTA/log
     LogDir = filename:join(PeerDir, "log"),
     ok = zraft_util:make_dir(PeerDir),
     ok = zraft_util:make_dir(LogDir),
@@ -207,6 +214,7 @@ handle_call({get_term, Index}, _From, State) ->
 handle_call({get_entries, From, To}, _From, State) ->
     Entries = entries(From, To, State),
     {reply, Entries, State,0};
+%% Index -> #fs.raft_meta | #fs.last_conf
 handle_call({get, Index}, _From, State) ->
     Val = erlang:element(Index, State),
     {reply, Val, State,0};
@@ -216,6 +224,7 @@ handle_call(stop, _From, State) ->
 handle_call(_Request, _From, State) ->
     {reply, ok, State,0}.
 
+%% 异步初始化
 handle_cast({init, PeerID}, loading) ->
     State = load_fs(PeerID),
     {noreply, State};
@@ -847,10 +856,11 @@ update_metadata(FS = #fs{meta_version = Version, first_index = Index, peer_dir =
     ok = file:write_file(FName, term_to_binary(#meta{version = NewVersion, first = Index, raft_meta = RaftMeta})),
     FS#fs{meta_version = NewVersion}.
 
+%% 根据 meta2.info 和 meta1.info 的内容加载 raft 元数据
 load_meta(FS = #fs{peer_dir = Dir,peer_id = ID}) ->
     Meta2 = #meta{version = V2} = case read_meta_file(filename:join(Dir, "meta2.info")) of
                                       {error, _} ->
-                                          #meta{version = 1, first = 1,raft_meta = #raft_meta{id = ID}};
+                                          #meta{version = 1, first = 1, raft_meta = #raft_meta{id = ID}};
                                       M ->
                                           M
                                   end,
@@ -1042,10 +1052,10 @@ make_snapshot_info(Index,
     #snapshot_info{term = Term, index = Index, conf = Conf, conf_index = ConfIndex}.
 
 %% 读取对应一个 peer 的 raft 元数据
-%% [Note] meta1 和 meta2 分别对应了什么？
+%% [Note] meta1 和 meta2 中的字段含义
 load_raft_meta(Dir) ->
     case read_meta_file(filename:join(Dir, "meta2.info")) of
-        #meta{version = V1}=M1 ->
+        #meta{version = V1}=M1 ->   %% 若 meta2.info 中存在 version 字段
             case read_meta_file(filename:join(Dir, "meta1.info")) of
                 #meta{version = V2}=M2 when V2>V1->
                     {ok,M2#meta.raft_meta};

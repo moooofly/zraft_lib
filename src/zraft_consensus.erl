@@ -99,6 +99,13 @@
 %% election_timeout 默认值为 500 ms
 -define(ETIMEOUT, zraft_util:get_env(?ELECTION_TIMEOUT_PARAM, ?ELECTION_TIMEOUT)).
 
+%% log -> zraft_fs_log 进程 pid
+%% fsm -> zraft_fsm 进程 pid
+%% id ->
+%% back_end ->
+%% snapshot_info ->
+%% async ->
+%% bootstrap ->
 -record(init_state, {log, fsm, id, back_end, snapshot_info, async, bootstrap = false}).
 -record(sessions, {read = [], conf}).
 -record(state, {
@@ -232,6 +239,8 @@ replicate_log(P, ToPeer, AppendReq) ->
     send_event(P, {replicate_log, ToPeer, AppendReq}).
 
 %% @doc Generate initial peer state.
+%% 用于初始化 consensus 中的第一个 peer
+%% 注意：此处为同步调用
 -spec initial_bootstrap(peer_id()) -> ok.
 initial_bootstrap(P) ->
     gen_fsm:sync_send_event(P, bootstrap).
@@ -286,7 +295,13 @@ init_state(InitState) ->
         snapshot_info = Info
     } = InitState,
     ?INFO(InitState, "Init state"),
+    %% Meta 的内容举例
+    %% {raft_meta,{test1,test@Betty},{test1,test@Betty},2,zraft_dict_backend}
+    %% {raft_meta,{test3,test@Betty},undefined,0,zraft_dict_backend}
+    %% {raft_meta,{test2,test@Betty},undefined,0,zraft_dict_backend}
     Meta = zraft_fs_log:get_raft_meta(Log),
+    ?INFO(InitState, "Meta = ~p", [Meta] ),
+    %% 为 raft 设置 backend
     case maybe_set_back_end(BackEnd, Meta, Log) of
         {error, Error} ->
             {stop, {error, Error}, InitState};
@@ -316,6 +331,7 @@ init_state(InitState) ->
             end
     end.
 
+%% 设置 raft backend
 maybe_set_back_end(NewBackEnd, Meta = #raft_meta{back_end = undefined}, Log) ->
     Meta1 = Meta#raft_meta{back_end = NewBackEnd},
     zraft_fs_log:update_raft_meta(Log, Meta1),

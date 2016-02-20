@@ -196,9 +196,12 @@ set_new_conf(PeerID, NewPeers, OldPeers, Timeout) ->
         Else ->
             Else
     end.
+
+
 %%%===================================================================
 %%% Create new quorum
 %%%===================================================================
+
 -spec create(Peers, BackEnd) -> {ok, ResultPeers}|{error, term()} when
     Peers :: list(zraft_consensus:peer_id()),
     BackEnd :: module(),
@@ -206,14 +209,18 @@ set_new_conf(PeerID, NewPeers, OldPeers, Timeout) ->
 %% @doc Create new quorum.
 %% @equiv create(lists:nth(1,Peers),Peers,UseBackend)
 %% @end
+
+%% 例子：在本地节点上启动名字为 test1, test2, test3 的三个进程
+%% zraft_client:create([{test1,node()},{test2,node()},{test3,node()}],zraft_dict_backend).
 create(Peers, UseBackend) ->
     [FirstPeer | _] = Peers,
     case FirstPeer of
-        {_, Node} when Node =:= node() ->
+        {_, Node} when Node =:= node() ->   %% 对应本地节点情况
             create(FirstPeer, Peers, UseBackend);
         {_, Node} ->
             rpc:call(Node, ?MODULE, create, [FirstPeer, Peers, UseBackend])
     end.
+
 -spec create(FirstPeer, Peers, BackEnd) -> {ok, ResultPeers}|{error, StartError|StartErrors}|{error, ApplyConfError} when
     FirstPeer :: zraft_consensus:peer_id(),
     Peers :: list(zraft_consensus:peer_id()),
@@ -224,26 +231,33 @@ create(Peers, UseBackend) ->
     ApplyConfError :: apply_conf_error().
 %% @doc Create new quorum.
 %%
-%% First it will be initialized FirstPeer. After that all other peers will be started and new configuration
+%% First it will be initialized FirstPeer. 
+%% After that all other peers will be started and new configuration
 %% will be applied to the FirstPeer and replicated to other.
 %%
 %% It returns error in following cases:
-%%
 %% 1. Some peer has been alredy started or can't be started
-%%
 %% 2. Can't apply new configuration to peers.
+%%
 %% @end
+%%
+%% 只要 AllPeers 列表中有一个 peer 曾经存在过（存在目录文件）或正在运行中
+%% 则该调用直接返回 error 信息
 create(FirstPeer, AllPeers, UseBackend) ->
+    %% 确定 AllPeers 列表中哪些 peer 是重来没有存在过的（不是指正在运行）
     case lists:foldl(fun(P, Acc) ->
-        case check_exists(P) of
-            ok ->
-                Acc;
-            {error, Error} ->
-                [{P, Error} | Acc]
-        end end, [], AllPeers) of
-        [] ->
+                        case check_exists(P) of
+                            ok ->
+                                Acc;
+                            {error, Error} ->
+                                [{P, Error} | Acc]
+                        end
+                    end, [], AllPeers) of
+        [] ->   %% 对应 AllPeers 中全部 peer 未存在过的情况
+            %% 为每个 peer 创建相应的进程组
             case start_peers(UseBackend, AllPeers) of
                 ok ->
+                    %% 令 peer 组中的第一个优先进行初始化
                     case catch zraft_consensus:initial_bootstrap(FirstPeer) of
                         ok ->
                             set_new_conf(FirstPeer, AllPeers, [FirstPeer], ?CREATE_TIMEOUT);
@@ -257,11 +271,13 @@ create(FirstPeer, AllPeers, UseBackend) ->
             {error, Errors}
     end.
 
+%% 为每个 peer 在 zraft_lib_sup 下启动相应的 zraft_consensus 进程
 -spec start_peers(module(), list(zraft_consensus:peer_id())) ->
     ok|{error, {already_present, zraft_consensus:peer_id()}}|{error, {zraft_consensus:peer_id(), term()}}.
 start_peers(UseBackEnd, [P | T]) ->
     Result = case P of
                  {_Name, Node} when Node =:= node() ->
+                     %% 为指定 peer 在 zraft_lib_sup 下启动 zraft_consensus 进程
                      zraft_lib_sup:start_consensus(P, UseBackEnd);
                  {_Name, Node} ->
                      rpc:call(Node, zraft_lib_sup, start_consensus, [P, UseBackEnd])
@@ -281,9 +297,13 @@ start_peers(UseBackEnd, [P | T]) ->
 start_peers(_UseBackEnd, [])->
     ok.
 
+%% 确定 peer 是否已经存在
+%% 1. 若 PeerDir 存在，则认为 peer 已经存在
+%% 2. 若 PeerDir 不存在但匹配名字 Name 的进程存在，则认为 peer 已经存在
 -spec check_exists(zraft_consensus:peer_id()) -> ok | {error, exists}.
 check_exists(Peer = {Name, Node}) when Node =:= node() ->
     PeerDir = filename:join([zraft_util:get_env(log_dir, "data"), zraft_util:peer_name(Peer)]),
+    io:format("[moooofly] Peer -> ~p    PeerDir -> ~p~n", [Peer,PeerDir]),
     case file:list_dir(PeerDir) of
         {ok, _} ->
             {error, already_present};

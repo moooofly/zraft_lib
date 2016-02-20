@@ -40,13 +40,17 @@ start_link() ->
     }}).
 init([]) ->
     %% 因为 election_timeout 默认值为 500 ms ，此处的值默认情况下计算为 2
+    %% [Note] 这里的计算是基于什么考虑的？
     Timeout = max(1,round(zraft_consensus:get_election_timeout()*4/1000)),
-    %% [Note] 这里的计算是基于什么想法？
+    %% 此处为 one_for_one 所以一旦磁盘上存在 raft 元数据，则监督树启动后
+    %% 会立即创建相应的子进程 zraft_consensus
     SupFlags = {one_for_one,2,Timeout},
     %% 根据保存在磁盘上的 raft 元数据创建对应每个 peer 的子进程规范列表
     Peers  = read_peers(),
     {ok, {SupFlags, Peers}}.
 
+%% 用于在 zraft_lib_sup 进程下动态创建 zraft_consensus 子进程
+%% PeerID -> {atom(), node()}
 -spec start_consensus(zraft_consensus:peer_id(),module()) -> supervisor:startchild_ret().
 start_consensus(PeerID,BackEnd)->
     Spec = consensus_spec([PeerID,BackEnd]),
@@ -79,7 +83,7 @@ consensus_spec([{PeerName,_}|_]=Args) ->
     }.
 
 %%@private
-%% 从保存 RAFT 日志和元数据的目录中读取 peer 相关信息
+%% 从保存 raft 日志和元数据的目录中读取 peer 相关信息
 read_peers()->
     DataDir = zraft_util:get_env(log_dir, "data"),
     case file:list_dir(DataDir) of
@@ -89,15 +93,18 @@ read_peers()->
             []
     end.
 
-%% 从这里可以看出每个 peer 占用一个单独的目录文件夹
+%% 根据 data 目录下的 raft 元数据生成 peer 的子进程规范列表
+%%
 %% 该函数完成如下几个动作：
 %% 1. 读取对应每个 peer 的 raft 元数据
 %% 2. 根据 raft 元数据创建 peer 的子进程启动规范
-%% 3. 返回子进程规范列表
+%% 3. 最终通过 Acc 返回子进程规范列表
 %% 
+%% 每个 peer 占用一个单独的目录文件夹
+%% Dir -> 以 36 进程表示的目录名，例如 629EWAR87JDBH7W4R88E3MWTA
 read_peers(DataDir,[Dir|T],Acc)->
     RaftDir = filename:join(DataDir,Dir),
-    %% 加载 raft 元数据
+    %% 加载 raft 元数据 #raft_meta{}
     case zraft_fs_log:load_raft_meta(RaftDir) of
         {ok,#raft_meta{id = Peer,back_end = BackEnd}}->
             Spec = consensus_spec([Peer,BackEnd]),

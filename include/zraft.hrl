@@ -1,7 +1,9 @@
 
+%% 由 candidate 发起，用来选举
 -record(vote_request,{from,term,epoch,last_index,last_term}).
 -record(vote_reply,{from_peer,epoch,request_term,peer_term,granted,commit}).
 
+%% 由 leader 发起，用来分发日志
 -record(append_entries, {
     term =0,
     epoch=0,
@@ -57,6 +59,7 @@
 
 -record(pconf,{old_peers=[],new_peers=[]}).
 
+%% id -> peer_id() -> {atom(), node()}
 -record(raft_meta,{id,voted_for,current_term=0,back_end}).
 
 -record(peer,{id,next_index=1,has_vote=false,last_agree_index=0,epoch=0}).

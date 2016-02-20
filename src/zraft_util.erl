@@ -191,6 +191,10 @@ gen_server_cancel_timer(Ref)->
             RemainingTime
     end.
 
+%% from_peer_addr() -> {peer_id(), pid()}
+%%                  -> {{peer_name(), node()}, pid()}
+%%                  -> {{atom(), node()}, pid()}
+%% ID -> peer_id() -> {atom(), node()}
 -spec peer_id(zraft_consensus:from_peer_addr())->zraft_consensus:peer_id().
 peer_id({ID,_})->
     ID.
@@ -236,11 +240,13 @@ start_app(App,ok) ->
     io:format("starting ~s~n",[App]),
     case application:start(App) of
         {error,{not_started,App1}}->
+            io:format("    should start ~s first...~n",[App1]),
             start_app(App,start_app(App1,ok));
         {error, {already_started, App}}->
+            io:format("    already start ~s~n",[App]),
             ok;
         Else->
-            io:format("start result ~s - ~p~n",[App,Else]),
+            io:format("    new start ~s - ~p~n",[App,Else]),
             Else
     end;
 start_app(_,Error) ->

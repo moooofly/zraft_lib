@@ -14,3 +14,5 @@ doc
 .combo_dialyzer_plt
 .tags
 .tags_sorted_by_file
+data/
+log/

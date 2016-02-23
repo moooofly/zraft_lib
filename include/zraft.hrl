@@ -40,7 +40,7 @@
 -define(BLANK_CONF,blank).
 -define(STABLE_CONF,stable).
 -define(STAGING_CONF,staging).
--define(TRANSITIONAL_CONF,transactional).
+-define(TRANSITIONAL_CONF,transitional).        %% 过渡状态
 
 -define(ELECTION_TIMEOUT_PARAM,election_timeout).
 -define(ELECTION_TIMEOUT,500).
@@ -59,11 +59,19 @@
 
 -record(pconf,{old_peers=[],new_peers=[]}).
 
-%% id -> peer_id() -> {atom(), node()}
+%% id           -> peer_id() -> {atom(), node()}
+%% voted_for    -> {atom(), node()} | undefined
+%% current_term -> interger()
+%% back_end     -> zraft_dict_backend
 -record(raft_meta,{id,voted_for,current_term=0,back_end}).
 
+%% 例如 {peer,{test1,test@Betty},1,true,0,1}
 -record(peer,{id,next_index=1,has_vote=false,last_agree_index=0,epoch=0}).
 
+%% first_index  -> interger()
+%% last_index   -> interger()
+%% last_term    -> interger()
+%% commit_index -> interger()
 -record(log_descr,{first_index,last_index,last_term,commit_index}).
 
 -record(read,{from,request,watch=false,global_time}).

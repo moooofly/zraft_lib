@@ -65,7 +65,7 @@
     raft,                   %% zraft_consensus:from_peer_addr() -> {{peer_name(), node()}, pid()}
     raft_state = follower,  %% Raft 的三种状态 leader | follower | candidate
     sessions,
-    watchers,
+    watchers,               %% xxx_watchers 类型为 bag 的 ets 表
     monitors,
     ustate,                 %% dict
     back_end,
@@ -74,9 +74,9 @@
     log_count = 0,
     max_count,              %% 触发快照/日志切割的 entry 阈值，默认 1000
     active_snapshot,
-    dir,                    %% 例如 "data/629EWAR87JDBH7W4R88E3MWTA/snapshots"
-    snapshot_count = 0,
-    last = 0,
+    dir,                    %% snapshots 所在目录位置，例如 "data/629EWAR87JDBH7W4R88E3MWTA/snapshots"
+    snapshot_count = 0,     %% 当前 snapshots 的数量
+    last = 0,               %% 上一个 snapshots 的编号
     last_dir = [],
     prev_snapshot}).
 
@@ -87,7 +87,7 @@ start_link(Raft, BackEnd) ->
     gen_server:start_link(?MODULE, [Raft, BackEnd], []).
 
 %% 设置 Raft 状态
-%% StateName -> leader | xxx
+%% StateName -> leader | follower | candidate
 -spec set_state(pid(), atom()) -> ok.
 set_state(P, StateName) ->
     gen_server:cast(P, {set_state, StateName}).
@@ -111,6 +111,7 @@ stat(P)->
     gen_server:call(P,stat).
 
 init([Raft, BackEnd]) ->
+    %% 异步初始化，实际调用 delayed_init
     gen_server:cast(self(), init),
     State = #state{
         back_end = BackEnd,
@@ -129,7 +130,9 @@ delayed_init(State = #state{raft = Raft}) ->
     ok = zraft_util:make_dir(Dir),
     %% 由于理论上讲存在目录重名的情况（几乎不会出现），创建后先清空
     Seq = clean_dir(Dir),
+    %% 创建 xxx_watchers 表
     WatchersTable = ets:new(watcher_table_name(State), [bag, {write_concurrency, false}, {read_concurrency, false}]),
+    %% 快照
     State1 = install_snapshot(State#state{
         snapshot_count = Seq + 1,
         last = Seq,
@@ -737,10 +740,12 @@ finish_snapshot(State) ->
             {noreply, State2}
     end.
 
-install_snapshot(State = #state{last = 0, back_end = BackEnd, raft = Raft}) ->
+install_snapshot(State = #state{last = 0, back_end = BackEnd, raft = Raft}) ->  %% last 为 0 表示未生成过快照
+    %% 删除 xxx_sessions 和 xxx_monitors ets 表
     drop_old_table(State),
     Sessions = ets:new(session_table_name(State), [bag, {write_concurrency, false}, {read_concurrency, false}]),
     Monitors = ets:new(monitor_table_name(State), [ordered_set, {write_concurrency, false}, {read_concurrency, false}]),
+    %% 
     {ok, UState} = BackEnd:init(zraft_util:peer_id(Raft)),
     truncate_log(Raft, #snapshot_info{}),
     State#state{ustate = UState, sessions = Sessions, monitors = Monitors};
@@ -762,6 +767,7 @@ install_snapshot(State = #state{raft = Raft, ustate = Ustate, back_end = BackEnd
     truncate_log(Raft, SnaphotInfo),
     State2.
 
+%% 删除 xxx_sessions 和 xxx_monitors ets 表
 drop_old_table(#state{sessions = S,monitors = M})->
     drop_table(S),
     drop_table(M).
@@ -879,6 +885,7 @@ change_raft_state(NewRaftState, State = #state{raft_state = leader, watchers = W
 %% 从非 leader 切换为 leader
 change_raft_state(leader, State = #state{monitors = M, raft = Raft}) ->
     NewLeader = zraft_util:peer_id(Raft),
+    lager:info("[zraft_fsm:~p] change_raft_state -> ~p become leader...", [self(), NewLeader]),
     upgrade_monitors(State#state.monitors),
     ets:foldl(fun(O, Acc) ->
         case O of

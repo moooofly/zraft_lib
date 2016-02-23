@@ -33,6 +33,7 @@
     install_snapshot/2,
     expire_session/2]).
 
+%% 用于维护具有 session 概念的 value 值
 -record(session,{v,s}).
 
 %% @doc init backend FSM
@@ -53,15 +54,20 @@ query(Key,Dict) ->
     end.
 
 %% @doc write data to FSM
+%% 保存普通 key/value
 apply_data({K,V},Dict)->
     Dict1 = dict:store(K,V,Dict),
     {ok,[K],Dict1}.
 
+%% 保存具有 session 概念的 key/value
 apply_data({K,V},Session,Dict)->
     Dict1 = dict:store(K,#session{v=V,s = Session},Dict),
     {ok,[K],Dict1}.
 
+%% 获取匹配 Session 的 key 列表和移除这些 key 后的 dict
 expire_session(Session,Dict)->
+    %% T 中保存匹配 Session 的 key 列表
+    %% D 中保存为匹配 Session 的 {key,value} 列表
     {T,D}=dict:fold(fun(K,V,{A1,A2})->
         case V of
             #session{s = Session}->
@@ -71,11 +77,13 @@ expire_session(Session,Dict)->
         end end,{[],[]},Dict),
     {ok,T,dict:from_list(D)}.
 
-%% @doc Prepare FSM to take snapshot async if it's possible otherwice return function to take snapshot immediatly
+%% @doc Prepare FSM to take snapshot async if it's possible otherwice return function to take snapshot immediately
 snapshot(Dict)->
     Fun = fun(ToDir)->
         File = filename:join(ToDir,"state"),
         {ok,FD}=file:open(File,[write,raw,binary]),
+        %% 1. 将 Dict 中的内容转换成 list 即 [{key,value},...]；
+        %% 2. 将 list 中的每个数据转换成 binary 后，以 <<0:8,Size:64,V1/binary>> 格式写入文件
         lists:foreach(fun(E)->
             V1 = term_to_binary(E),
             Size = size(V1),
@@ -96,6 +104,7 @@ snapshot_failed(_Reason,Dict)->
     {ok,Dict}.
 
 %% @doc Read data from snapshot file or directiory.
+%% 基于快照文件恢复数据
 install_snapshot(Dir,_)->
     File = filename:join(Dir,"state"),
     {ok,FD}=file:open(File,[read,raw,binary]),

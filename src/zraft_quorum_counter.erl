@@ -25,7 +25,6 @@
 %% API
 -export([start_link/1]).
 
-
 %% gen_server callbacks
 -export([init/1,
     handle_call/3,
@@ -60,6 +59,7 @@ set_conf(P,Conf,ConfState)->
 sync(P,PeerState)->
     gen_server:cast(P,PeerState).
 
+%% StateName -> follower | candidate | leader
 set_state(P,StateName)->
     gen_server:cast(P,{raft_state,StateName}).
 
@@ -85,6 +85,8 @@ handle_call(_Request, _From, State) ->
 
 handle_cast({raft_state,StateName},State)->
     {noreply,State#state{raft_state = StateName}};
+
+%% 设置空 conf 信息
 handle_cast({set_conf,?BLANK_CONF,ConfState},State)->
     State1 = State#state{
         conf_id = 0,
@@ -96,6 +98,7 @@ handle_cast({set_conf,?BLANK_CONF,ConfState},State)->
         old = []
     },
     {noreply,State1};
+%% 更新 conf 信息
 handle_cast({set_conf,{ConfID,#pconf{new_peers = New,old_peers = Old}},ConfState},State)->
     State1 = change_conf(ConfID,Old,New,ConfState,State),
     {noreply,State1};
@@ -119,7 +122,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% 变更 peer 状态信息
 change_peer(#peer{id = ID}=P,State=#state{old = O,new=N})->
-    lager:info("[moooofly] change_peer --->", []),
+    lager:info("[zraft_quorum_counter:~p] change_peer --->", [self()]),
     %% update(Key,Value,Dict)
     O1 = update(ID,P,O),
     N1 = update(ID,P,N),
@@ -142,7 +145,8 @@ change_epoch(State=#state{epoch_qourum = E,raft_state = leader,conf_id = ConfID}
         E->
             State;
         E1->
-            lager:info("[moooofly]     change_epoch ---> sync_peer(...,{sync_epoch,...}), E1 = ~p", [E1]),
+            lager:info("[zraft_quorum_counter:~p]     change_epoch ---> sync_peer(...,{sync_epoch,...}), E1 = ~p", 
+                [self(), E1]),
             zraft_consensus:sync_peer(State#state.raft,{sync_epoch,ConfID,E1}),
             State#state{epoch_qourum = E1}
     end;
@@ -155,7 +159,8 @@ change_last_agree_index(State=#state{index_quorum = I,raft_state = leader,conf_i
         I->
             State;
         I1->
-            lager:info("[moooofly]     change_last_agree_index ---> sync_peer(...,{sync_index,...}), I1 = ~p", [I1]),
+            lager:info("[zraft_quorum_counter:~p]     change_last_agree_index ---> sync_peer(...,{sync_index,...}), I1 = ~p", 
+                [self(), I1]),
             zraft_consensus:sync_peer(State#state.raft,{sync_index,ConfID,I1}),
             State#state{index_quorum = I1}
     end;
@@ -168,7 +173,8 @@ change_vote(State=#state{vote_quorum = V,raft_state = candidate,conf_id = ConfID
         V->     %% 与原 vote 状态相同
             State;
         V1->    %% 与原 vote 状态不同
-            lager:info("[moooofly]     change_vote ---> sync_peer(...,{sync_vote,...}), V1 = ~p", [V1]),
+            lager:info("[zraft_quorum_counter:~p]     change_vote ---> sync_peer(...,{sync_vote,...}), V1 = ~p", 
+                [self(), V1]),
             zraft_consensus:sync_peer(State#state.raft,{sync_vote,ConfID,V1}),
             State#state{vote_quorum = V1}
     end;

@@ -1084,12 +1084,13 @@ start_election(State) ->
     State1 = start_timer(State),
     {next_state,candidate,State1#state{current_term = NextTerm, leader = undefined, voted_for = PeerID}}.
 
+%% 根据投票结果判定自己是否能够成为 leader
 %% Check quorum vote
 %% FallBackStateName -> candidate
 maybe_become_leader(Vote,FallBackStateName, State) ->
     if
         Vote ->
-            ?INFO(State,"Now is leader in term ~p",[State#state.current_term]),
+            ?INFO(State,"[zraft_consensus:~p] I am Leader in term ~p.", [self(),State#state.current_term]),
             #state{
                 id = MyID,
                 quorum_counter = Counter,

@@ -229,7 +229,6 @@ handle_call({get_entries, From, To}, _From, State) ->
 %% Index -> #fs.raft_meta | #fs.last_conf
 handle_call({get, Index}, _From, State) ->
     Val = erlang:element(Index, State),
-    lager:info("[zraft_fs_log] handle_call => Index = ~p    Val = ~p", [Index, Val]),
     {reply, Val, State, 0};
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};

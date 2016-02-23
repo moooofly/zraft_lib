@@ -211,6 +211,7 @@ clear_test_dir(Dir)->
     application:unset_env(zraft_lib,snapshot_dir),
     del_dir(Dir).
 
+%% 过期或超时 判定，返回 true | {false, infinity} | {false, MilliSecondsLeft }
 is_expired(_Start,infinity)->
     {false,infinity};
 is_expired(Start,Timeout)->

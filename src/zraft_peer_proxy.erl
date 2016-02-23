@@ -52,15 +52,15 @@
 
 -record(snapshot_progress, {snapshot_dir, process, mref, index}).
 -record(state, {
-    peer,
+    peer,                   %% 例如 {peer,{test1,test@Betty},14,true,13,1}
     remote_peer_id,
-    raft,
-    quorum_counter,
+    raft,                   %% 例如 {{test1,test@Betty},<0.82.0>}
+    quorum_counter,         %% zraft_quorum_counter 进程 pid
     request_timer,
-    hearbeat_timer,
+    heartbeat_timer,
     request_ref,
     request_time,
-    force_hearbeat = false,
+    force_heartbeat = false,
     force_request = false,
     append_buffer,
     current_term = 0,
@@ -80,6 +80,7 @@ stop(Peer) ->
 stop_sync(Peer) ->
     gen_server:call(Peer, stop).
 
+%% Cmd -> {?UPDATE_CMD, Fun}
 cmd(Peer, Cmd) ->
     gen_server:cast(Peer, Cmd).
 
@@ -104,14 +105,14 @@ init([Raft,QuorumCounter,PeerID, BackEnd]) ->
         request_timeout = ReqTimeout
     }}.
 
-handle_call(force_hearbeat_timeout, _, State = #state{hearbeat_timer = Timer}) ->
+handle_call(force_heartbeat_timeout, _, State = #state{heartbeat_timer = Timer}) ->
     if
         Timer == undefined ->
             {reply, no_timer, State};
         true ->
             _ = zraft_util:gen_server_cancel_timer(Timer),
-            Timer1 = zraft_util:gen_server_cast_after(0, hearbeat_timeout),
-            {reply, ok, State#state{hearbeat_timer = Timer1}}
+            Timer1 = zraft_util:gen_server_cast_after(0, heartbeat_timeout),
+            {reply, ok, State#state{heartbeat_timer = Timer1}}
     end;
 handle_call(force_request_timeout, _, State = #state{request_timer = Timer}) ->
     if
@@ -153,16 +154,16 @@ handle_cast(?LOST_LEADERSHIP_CMD,
     State2 = reset_snapshot(State1),
     State3 = State2#state{append_buffer = undefined,peer = Peer#peer{has_vote = false, epoch = 0}, current_term = 0},
     {noreply, State3};
-handle_cast(hearbeat_timeout, State = #state{request_ref = Ref}) when Ref /= undefined ->
+handle_cast(heartbeat_timeout, State = #state{request_ref = Ref}) when Ref /= undefined ->
     {noreply, State};
-handle_cast(hearbeat_timeout, State) ->%%send new hearbeat
+handle_cast(heartbeat_timeout, State) ->%%send new heartbeat
     case State#state.snapshot_progres of
         undefined ->
             State2 = start_replication(State),
             {noreply, State2};
         _ ->
             %%Send herabeat to check update peer state
-            State2 = install_snapshot_hearbeat(hearbeat, State),
+            State2 = install_snapshot_heartbeat(heartbeat, State),
             {noreply, State2}
     end;
 handle_cast(request_timeout, State = #state{request_ref = undefined}) ->
@@ -174,19 +175,19 @@ handle_cast(request_timeout, State) ->%%send new request
     State3 = start_replication(State2#state{append_buffer = undefined}),%%Start new attempt
     {noreply, State3};
 
-handle_cast({?BECOME_LEADER_CMD, HearBeat},
+handle_cast({?BECOME_LEADER_CMD, Heartbeat},
     State = #state{peer = Peer}) ->%%peer has elected
-    #append_entries{term = CurrentTerm, epoch = Epoch, prev_log_index = LastLogIndex} = HearBeat,
+    #append_entries{term = CurrentTerm, epoch = Epoch, prev_log_index = LastLogIndex} = Heartbeat,
     State1 = reset_timers(true, State),%%discard all active requets
     State2 = reset_snapshot(State1),%%stop copy snaphsot
     State3 = State2#state{
-        force_hearbeat = true,%% We must match followers log before start replication
+        force_heartbeat = true,%% We must match followers log before start replication
         current_term = CurrentTerm,
         current_epoch = Epoch,
         peer = Peer#peer{last_agree_index = 0, next_index = LastLogIndex + 1},
         append_buffer = undefined
     },
-    State4 = replicate(HearBeat, State3),
+    State4 = replicate(Heartbeat, State3),
     {noreply, State4};
 
 handle_cast({?OPTIMISTIC_REPLICATE_CMD, Req},
@@ -212,8 +213,8 @@ handle_cast({?OPTIMISTIC_REPLICATE_CMD, Req},
 handle_cast({?OPTIMISTIC_REPLICATE_CMD, Req}, State) ->%%snapshot are being copied
     #append_entries{term = Term, epoch = Epoch} = Req,
     State1 = State#state{current_term = Term, current_epoch = Epoch},
-    %%Just send hearbeat
-    State2 = install_snapshot_hearbeat(hearbeat, State1),
+    %%Just send heartbeat
+    State2 = install_snapshot_heartbeat(heartbeat, State1),
     {noreply, State2};
 
 handle_cast(#append_reply{from_peer = From,epoch = Epoch, success = true, agree_index = Index, request_ref = RF},
@@ -225,7 +226,7 @@ handle_cast(#append_reply{from_peer = From,epoch = Epoch, success = true, agree_
                      %%We have new entries to replicate
                      start_replication(State2);
                  true ->
-                     start_hearbeat_timer(State2)
+                     start_heartbeat_timer(State2)
              end,
     {noreply, State3};
 
@@ -268,20 +269,20 @@ handle_cast(Resp = #install_snapshot_reply{from_peer = From,result = start, requ
     State3 = start_copy_snapshot(Resp, State2),
     State4 = if
                  FR ->
-                     install_snapshot_hearbeat(hearbeat, State3);
+                     install_snapshot_heartbeat(heartbeat, State3);
                  true ->
-                     start_hearbeat_timer(State3)
+                     start_heartbeat_timer(State3)
              end,
     {noreply, State4};
-handle_cast(#install_snapshot_reply{from_peer = From,result = hearbeat, request_ref = RF, epoch = Epoch},
+handle_cast(#install_snapshot_reply{from_peer = From,result = heartbeat, request_ref = RF, epoch = Epoch},
     State = #state{request_ref = RF, force_request = FR}) ->
     State1 = update_peer(Epoch,From, State),
     State2 = reset_timers(true, State1),
     State3 = if
                  FR ->
-                     install_snapshot_hearbeat(hearbeat, State2);
+                     install_snapshot_heartbeat(heartbeat, State2);
                  true ->
-                     start_hearbeat_timer(State2)
+                     start_heartbeat_timer(State2)
              end,
     {noreply, State3};
 handle_cast(#install_snapshot_reply{index = Index,from_peer = From, result = finish, request_ref = RF, epoch = Epoch},
@@ -309,8 +310,11 @@ handle_cast(#install_snapshot_reply{from_peer = From,request_ref = RF, epoch = E
 handle_cast(#install_snapshot_reply{}, State) ->%%Out of date responce
     {noreply, State};
 
+%% 更新指定 Peer 信息
 handle_cast({?UPDATE_CMD, Fun}, State = #state{peer = Peer,quorum_counter = C}) ->
+    %% Peer1 -> {peer,{test1,test@Betty},1,true,0,1}
     Peer1 = Fun(Peer),
+    ?INFO(State,"Peer after updated => ~p", [Peer1]),
     zraft_quorum_counter:sync(C,Peer1),
     {noreply, State#state{peer = Peer1}};
 handle_cast({get, From, GetIndex}, State = #state{peer = Peer}) ->
@@ -330,7 +334,7 @@ handle_info({'DOWN', Ref, process, _, normal},
     State = #state{snapshot_progres = #snapshot_progress{mref = Ref}}) ->
     ?INFO(State,"Snapshot has transfered."),
     State1 = reset_timers(false, State),
-    State2 = install_snapshot_hearbeat(finish, State1),
+    State2 = install_snapshot_heartbeat(finish, State1),
     {noreply, State2#state{snapshot_progres = undefined, force_request = true,append_buffer = undefined}};
 handle_info({'DOWN', Ref, process, _, Reason},
     State = #state{snapshot_progres = #snapshot_progress{mref = Ref}}) ->
@@ -359,7 +363,7 @@ code_change(_OldVsn, State, _Extra) ->
 start_replication(State = #state{append_buffer = Buffer}) when Buffer /= undefined->
     replicate(undefined,State);
 start_replication(State) ->
-    #state{peer = Peer, raft = Raft, force_hearbeat = FH, request_timeout = Timeout} = State,
+    #state{peer = Peer, raft = Raft, force_heartbeat = FH, request_timeout = Timeout} = State,
     #peer{next_index = NextIndex, id = PeerID} = Peer,
     PrevIndex = NextIndex - 1,
     RequestRef = erlang:make_ref(),
@@ -400,7 +404,7 @@ install_snapshot(Req, State) ->
         request_timer = Timer,
         snapshot_progres = SnapsotProgress,
         request_time = os:timestamp()}.
-install_snapshot_hearbeat(Type, State) ->
+install_snapshot_heartbeat(Type, State) ->
     #state{
         peer = Peer,
         request_timeout = Timeout,
@@ -436,37 +440,37 @@ reset_snapshot(State = #state{snapshot_progres = #snapshot_progress{mref = Ref, 
     end,
     State#state{snapshot_progres = undefined,append_buffer = undefined}.
 
-reset_timers(Result, State = #state{request_timer = RT, hearbeat_timer = HT}) ->
+reset_timers(Result, State = #state{request_timer = RT, heartbeat_timer = HT}) ->
     _ = cancel_timer(RT),
     _ = cancel_timer(HT),
     State1 = State#state{
         request_ref = undefined,
         request_timer = undefined,
-        hearbeat_timer = undefined},
+        heartbeat_timer = undefined},
     if
         Result ->
-            State1#state{force_hearbeat = false, force_request = false};
+            State1#state{force_heartbeat = false, force_request = false};
         true ->
             State1
     end.
 
-progress(State = #state{force_hearbeat = FH, force_request = FR}) ->
+progress(State = #state{force_heartbeat = FH, force_request = FR}) ->
     State1 = reset_timers(false, State),
     State2 = if
                  FH ->
 %%Attemt new heabeat scince last one failed
-%%if hearbeat accpetd we must start replicate log immediatly
+%%if heartbeat accpetd we must start replicate log immediatly
                      start_replication(State1#state{force_request = true});
                  FR ->
-%%Prev Hearbeat or replication failed
+%%Prev heartbeat or replication failed
                      start_replication(State1);
                  true ->
-%%Start hearbeat timer
-                     start_hearbeat_timer(State1)
+%%Start heartbeat timer
+                     start_heartbeat_timer(State1)
              end,
     {noreply, State2}.
 
-start_hearbeat_timer(State=#state{request_time = ReqTime}) ->
+start_heartbeat_timer(State=#state{request_time = ReqTime}) ->
     ElectionTimeout = zraft_consensus:get_election_timeout(),
     Timeout = if
                ReqTime==undefined->
@@ -479,8 +483,8 @@ start_hearbeat_timer(State=#state{request_time = ReqTime}) ->
                            ElectionTimeout-T1
                    end
            end,
-    Ref =  zraft_util:gen_server_cast_after(Timeout, hearbeat_timeout),
-    State#state{hearbeat_timer = Ref,request_time = undefined}.
+    Ref =  zraft_util:gen_server_cast_after(Timeout, heartbeat_timeout),
+    State#state{heartbeat_timer = Ref,request_time = undefined}.
 
 reply({Ref, Pid}, Msg) ->
     Pid ! {Ref, Msg};
@@ -624,7 +628,7 @@ commands() ->
                 prev_log_index = 5,
                 prev_log_term = 5,
                 term = 5}}),
-        R1 = gen_server:call(Proxy, force_hearbeat_timeout),
+        R1 = gen_server:call(Proxy, force_heartbeat_timeout),
         ?assertEqual(no_timer, R1),
         R2 = wait_request(),
         ?assertMatch(
@@ -664,7 +668,7 @@ commands() ->
         ?assertMatch(#peer{last_agree_index = 5}, R11),
         R12 = gen_server:call(Proxy, force_request_timeout),
         ?assertEqual(no_timer, R12),
-        R13 = gen_server:call(Proxy, force_hearbeat_timeout),
+        R13 = gen_server:call(Proxy, force_heartbeat_timeout),
         ?assertEqual(ok, R13),
         R14 = wait_request(),
         ?assertMatch(
@@ -695,7 +699,7 @@ commands() ->
             #state{
                 current_epoch = 4,
                 current_term = 6,
-                force_hearbeat = false,
+                force_heartbeat = false,
                 force_request = false,
                 request_ref = undefined,
                 request_timer = undefined,
@@ -704,7 +708,7 @@ commands() ->
             },
             S1
         ),
-        gen_server:call(Proxy, force_hearbeat_timeout),
+        gen_server:call(Proxy, force_heartbeat_timeout),
         R19 = wait_request(),
         ?assertMatch(
             {replicate_log, #append_entries{entries = true, prev_log_index = 6}},

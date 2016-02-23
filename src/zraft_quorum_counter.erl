@@ -42,17 +42,28 @@
 
 -include("zraft.hrl").
 
+
+%%
+%% raft -> zraft_consensus 进程 pid
+%% conf_id -> 
+%% conf_state -> blank | stable | staging | transitional
+%% epoch_qourum -> 
+%% index_quorum -> 
+%% vote_quorum -> 标识 has_vote 的 peer 是否为大多数
+%% raft_state -> follower | candidate | leader
 -record(state, {raft,conf_id,old,new,conf_state,epoch_qourum,index_quorum,vote_quorum,raft_state}).
 
 set_conf(P,Conf,ConfState)->
     gen_server:cast(P,{set_conf,Conf,ConfState}).
 
+%% PeerState ->  #peer{} ，例如 {peer,{test1,test@Betty},1,true,0,1}
 sync(P,PeerState)->
     gen_server:cast(P,PeerState).
 
 set_state(P,StateName)->
     gen_server:cast(P,{raft_state,StateName}).
 
+%% Raft -> zraft_consensus 进程 pid
 start_link(Raft) ->
     gen_server:start_link(?MODULE, [Raft], []).
 
@@ -88,6 +99,8 @@ handle_cast({set_conf,?BLANK_CONF,ConfState},State)->
 handle_cast({set_conf,{ConfID,#pconf{new_peers = New,old_peers = Old}},ConfState},State)->
     State1 = change_conf(ConfID,Old,New,ConfState,State),
     {noreply,State1};
+
+%% 变更 peer 状态信息
 handle_cast(#peer{}=P,State)->
     State1 = change_peer(P,State),
     {noreply,State1};
@@ -104,8 +117,10 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-
+%% 变更 peer 状态信息
 change_peer(#peer{id = ID}=P,State=#state{old = O,new=N})->
+    lager:info("[moooofly] change_peer --->", []),
+    %% update(Key,Value,Dict)
     O1 = update(ID,P,O),
     N1 = update(ID,P,N),
     State1 = State#state{old = O1,new = N1},
@@ -121,32 +136,39 @@ change_conf(ConfID,OldPeer,NewPeers,ConfState,State=#state{old = O1,new = N1})->
     State3 = change_epoch(State2),
     change_last_agree_index(State3).
 
+%% 变更 epoch
 change_epoch(State=#state{epoch_qourum = E,raft_state = leader,conf_id = ConfID})->
     case quorumMin(State,#peer.epoch) of
         E->
             State;
         E1->
+            lager:info("[moooofly]     change_epoch ---> sync_peer(...,{sync_epoch,...}), E1 = ~p", [E1]),
             zraft_consensus:sync_peer(State#state.raft,{sync_epoch,ConfID,E1}),
             State#state{epoch_qourum = E1}
     end;
 change_epoch(State)->
     State.
+
+%% 变更 index
 change_last_agree_index(State=#state{index_quorum = I,raft_state = leader,conf_id = ConfID})->
     case quorumMin(State,#peer.last_agree_index) of
         I->
             State;
         I1->
+            lager:info("[moooofly]     change_last_agree_index ---> sync_peer(...,{sync_index,...}), I1 = ~p", [I1]),
             zraft_consensus:sync_peer(State#state.raft,{sync_index,ConfID,I1}),
             State#state{index_quorum = I1}
     end;
 change_last_agree_index(State)->
     State.
 
+%% 变更 vote
 change_vote(State=#state{vote_quorum = V,raft_state = candidate,conf_id = ConfID})->
     case quorumAll(State,#peer.has_vote) of
-        V->
+        V->     %% 与原 vote 状态相同
             State;
-        V1->
+        V1->    %% 与原 vote 状态不同
+            lager:info("[moooofly]     change_vote ---> sync_peer(...,{sync_vote,...}), V1 = ~p", [V1]),
             zraft_consensus:sync_peer(State#state.raft,{sync_vote,ConfID,V1}),
             State#state{vote_quorum = V1}
     end;
@@ -181,11 +203,13 @@ quorumMin(#state{conf_state = ConfState,old = Old,new = New}, GetIndex) ->
             quorumMin1(Old, GetIndex)
     end.
 
+%% 判定 has_vote 的 peer 是否过半数
+%% GetIndex -> #peer.has_vote 即 4
 quorumAll(#state{conf_id = 0},_GetIndex)->
     true;
 quorumAll(#state{conf_state = ConfState,old = Old,new = New}, GetIndex) ->
     case ConfState of
-        ?TRANSITIONAL_CONF ->
+        ?TRANSITIONAL_CONF ->   %% 过渡状态
             quorumAll1(Old, GetIndex) andalso quorumAll1(New, GetIndex);
         _ ->
             quorumAll1(Old, GetIndex)
@@ -211,9 +235,10 @@ quorumAll1([],_GetIndex) ->
 quorumAll1(Peers, GetIndex) ->
     quorumAll(Peers,GetIndex,0,0).
 
+%% 判定已经 vote 的 peer 是否过半数
 quorumAll([], _GetIndex, Count,TrueCount) ->
     TrueCount >= (erlang:trunc(Count / 2) + 1);
-quorumAll([{_, Peer} | T2], GetIndex,Count,TrueCount) ->%%ID1==ID2
+quorumAll([{_, Peer} | T2], GetIndex,Count,TrueCount) -> %% ID1==ID2
     V = element(GetIndex,Peer),
     V1 = if
              V->
@@ -223,6 +248,10 @@ quorumAll([{_, Peer} | T2], GetIndex,Count,TrueCount) ->%%ID1==ID2
          end,
     quorumAll(T2,GetIndex, Count + 1,V1).
 
+%% 将 K/V 值更新到 Dict 中
+%% 1.Dict 中的内容按照 Key 从小到大排序
+%% 2.更新时插入的位置取决于 Key 的大小
+%% 3.若 K/V 中的 Key 小于 Dict 中的任何一个 Key 则不插入
 update(Key,V,[{K,_}=E|Dict]) when Key > K ->
     [E|update(Key,V, Dict)];
 update(Key,V, [{K,_Val}|Dict]) when Key == K ->

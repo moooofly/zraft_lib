@@ -93,23 +93,35 @@
     raft_meta = #raft_meta{}
 }).
 -record(fs, {
-    raft_meta,
-    peer_id,
-    open_segment,
-    peer_dir,
-    log_dir,
-    closed_segments = [],
-    next_file,
+    raft_meta,              %% 例如 {raft_meta,{test1,test@Betty},{test1,test@Betty},5,zraft_dict_backend}
+    peer_id,                %% 例如 {test1,test@Betty}
+    open_segment,           %% 例如 {segment,13,13,"data/629EWAR87JDBH7W4R88E3MWTA/log/open-1.rlog",
+                            %%              {file_descriptor,prim_file,{#Port<0.4774>,748}},
+                            %%              41,
+                            %%              [{entry,13,13,3,<<>>,1456132614391}]},
+    peer_dir,               %% 例如 "data/629EWAR87JDBH7W4R88E3MWTA"
+    log_dir,                %% 例如 "data/629EWAR87JDBH7W4R88E3MWTA/log"
+    closed_segments = [],   %% 例如 [{segment,12,12,"data/629EWAR87JDBH7W4R88E3MWTA/log/12-12.rlog",undefined,1,
+                            %%                [{entry,12,12,3,<<>>,1456131631856}]},
+                            %%       {segment,11,11,"data/629EWAR87JDBH7W4R88E3MWTA/log/11-11.rlog",undefined,1,
+                            %%                [{entry,11,11,3,<<>>,1456130883985}]},
+                            %%       ...
+                            %%       {segment,3,3,"data/629EWAR87JDBH7W4R88E3MWTA/log/3-3.rlog",undefined,1,
+                            %%                [{entry,3,3,3,<<>>,1455952983142}]},
+                            %%       {segment,1,2,"data/629EWAR87JDBH7W4R88E3MWTA/log/1-2.rlog",undefined,1,
+                            %%                [{entry,2,2,3,<<>>,1455947844850},
+                            %%                 {entry,1,1,1,{pconf,[{test1,test@Betty}],[]},1455947843668}]}],
+    next_file,              %% 例如 undefined
     fcounter = 1,
     meta_version = 1,
-    first_index = 1,
-    last_index = 0,
-    last_term = 0,
-    commit = 0,
-    configs,
-    last_conf,
-    max_segment_size,
-    snapshot_info,
+    first_index = 1,        %% 用于构造 #log_descr{}
+    last_index = 0,         %% 用于构造 #log_descr{}
+    last_term = 0,          %% 用于构造 #log_descr{}
+    commit = 0,             %% 用于构造 #log_descr{}
+    configs,                %% 例如 [{1,{pconf,[{test1,test@Betty}],[]}}]
+    last_conf,              %% 例如 {1,{pconf,[{test1,test@Betty}],[]}} | blank
+    max_segment_size,       %% 10485760 ?
+    snapshot_info,          %% 例如 {snapshot_info,0,0,0,blank}
     unsynced=false,
     sync_mode
 }).
@@ -207,22 +219,23 @@ handle_call({raft_meta, Meta}, _From, State) ->
     {reply, ok, State1, 0};
 handle_call({get, log_descr}, _From, State) ->
     Res = log_descr(State),
-    {reply, Res, State,0};
+    {reply, Res, State, 0};
 handle_call({get_term, Index}, _From, State) ->
     Val = term_at(Index, State),
-    {reply, Val, State,0};
+    {reply, Val, State, 0};
 handle_call({get_entries, From, To}, _From, State) ->
     Entries = entries(From, To, State),
-    {reply, Entries, State,0};
+    {reply, Entries, State, 0};
 %% Index -> #fs.raft_meta | #fs.last_conf
 handle_call({get, Index}, _From, State) ->
     Val = erlang:element(Index, State),
-    {reply, Val, State,0};
+    lager:info("[zraft_fs_log] handle_call => Index = ~p    Val = ~p", [Index, Val]),
+    {reply, Val, State, 0};
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
 
 handle_call(_Request, _From, State) ->
-    {reply, ok, State,0}.
+    {reply, ok, State, 0}.
 
 %% 异步初始化
 handle_cast({init, PeerID}, loading) ->
@@ -231,20 +244,20 @@ handle_cast({init, PeerID}, loading) ->
 
 handle_cast({replicate_log, ToPeer, Req}, State) ->
     handle_replicate_log(ToPeer, Req, State),
-    {noreply, State,0};
+    {noreply, State, 0};
 handle_cast( {append_leader, Entries}, State) ->
     State1 = append(Entries, State),
     State2 = State1#fs{unsynced = true},
-    {noreply, State2,0};
+    {noreply, State2, 0};
 handle_cast({command, From, Cmd}, State) ->
     {ok, Reply, State1} = handle_command(Cmd, State),
     send_reply(From, Reply),
-    {noreply, State1,0};
+    {noreply, State1, 0};
 handle_cast(sync,State)->
     State1 = sync_last(State),
     {noreply,State1};
 handle_cast(_Request, State) ->
-    {noreply, State,0}.
+    {noreply, State, 0}.
 
 
 handle_info(timeout,State)->

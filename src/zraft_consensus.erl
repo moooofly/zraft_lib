@@ -105,27 +105,30 @@
 %% back_end ->
 %% snapshot_info ->
 %% async ->
-%% bootstrap ->
+%% bootstrap -> 表示是否已完成自举；false 尚未完成；{Pid,Tag} 发起自举的进程相关信息
 -record(init_state, {log, fsm, id, back_end, snapshot_info, async, bootstrap = false}).
 -record(sessions, {read = [], conf}).
 -record(state, {
-    log,
-    config,
-    id,
+    log,                    %% zraft_fs_log 进程 pid
+    config,                 %% 例如 {config,1,stable,
+                            %%              {1,{pconf,[{test1,test@Betty}],[]}},
+                            %%              [{test1,test@Betty}],
+                            %%              []},
+    id,                     %% 例如 {test1,test@Betty}
     timer,
     current_term = 0,
-    snapshot_info,
+    snapshot_info,          %% 例如 {snapshot_info,0,0,0,blank}
     allow_commit = false,
     epoch = 1,
-    leader,
-    voted_for,
-    back_end,
-    peers = [],
-    log_state,
-    last_hearbeat,
-    election_timeout,
-    state_fsm,
-    quorum_counter,
+    leader,                 %% 例如 {test1,test@Betty}
+    voted_for,              %% 例如 {test1,test@Betty}
+    back_end,               %% 例如 zraft_dict_backend
+    peers = [],             %% 例如 [{{test1,test@Betty},<0.101.0>}]
+    log_state,              %% 例如 {log_descr,1,13,13,13}
+    last_heartbeat,         %% 例如 max
+    election_timeout,       %% 500
+    state_fsm,              %% zraft_fsm 进程 pid
+    quorum_counter,         %% zraft_quorum_counter 进程 pid
     sessions = #sessions{}
 }).
 
@@ -181,6 +184,7 @@ async_query(PeerID,From,WatchRef,Query,Timeout)->
 %% @doc Read last stable quorum configuration
 -spec get_conf(peer_id(), timeout()) -> {ok, term()}|{leader, peer_id()}|retry|{error, term()}.
 get_conf(PeerID, Timeout) ->
+    lager:info("[moooofly] get_conf -> PeerID = ~p    Timeout = ~p", [PeerID,Timeout]),
     sync_leader_read_request(PeerID, get_conf_request, [], Timeout).
 
 %% @doc Write data to user backend
@@ -239,13 +243,15 @@ replicate_log(P, ToPeer, AppendReq) ->
     send_event(P, {replicate_log, ToPeer, AppendReq}).
 
 %% @doc Generate initial peer state.
-%% 用于初始化 consensus 中的第一个 peer
+%% 用于初始化 consensus 中的第一个 peer 
+%% 该函数仅在 zraft_client:create 中被调用，此时 gen_fsm 为 load 状态
 %% 注意：此处为同步调用
 -spec initial_bootstrap(peer_id()) -> ok.
 initial_bootstrap(P) ->
     gen_fsm:sync_send_event(P, bootstrap).
 
 
+%% Sync -> {sync_index,ConfID,I1} | {sync_vote,ConfID,V1} | {sync_epoch,ConfID,E1}
 -spec sync_peer(from_peer_addr(),{SyncType::atom(),ConfID::index(),term()}) -> ok.
 sync_peer(P,Sync) ->
     send_all_state_event(P,{sync_peer,Sync}).
@@ -266,6 +272,8 @@ make_snapshot_info(Peer, From, Index) ->
 truncate_log(Raft, SnapshotInfo) ->
     send_all_state_event(Raft, SnapshotInfo).
 
+%%
+%% Function -> read_request | get_conf_request
 -spec sync_leader_read_request(peer_id(), atom(), list(), timeout()) -> {ok, term()}|retry|{error, not_leader}|{error, loading}|{error, term()}.
 sync_leader_read_request(PeerID, Function, Args, Timeout) ->
     Now = os:timestamp(),
@@ -286,6 +294,7 @@ init([PeerID, BackEnd]) ->
     {ok, Log} = zraft_fs_log:start_link(PeerID),
     {ok, load, #init_state{fsm = FSM, log = Log, back_end = BackEnd, id = PeerID}}.
 
+%% [Note] 从哪里调用
 init_state(InitState) ->
     #init_state{
         id = PeerID,
@@ -307,9 +316,16 @@ init_state(InitState) ->
             {stop, {error, Error}, InitState};
         {ok, Meta1} ->
             #raft_meta{current_term = CurrentTerm, back_end = BackEnd, voted_for = VotedFor} = Meta1,
+            ?INFO(InitState, "CurrentTerm = ~p    BackEnd = ~p    VotedFor = ~p", [CurrentTerm,BackEnd,VotedFor] ),
+            %% 创建计数进程
             {ok,Counter} = zraft_quorum_counter:start_link(self()),
+            %% ConfDescr -> {1,{pconf,[{test1,test@Betty}],[]}}
             ConfDescr = zraft_fs_log:get_last_conf(Log),
             LogDescr = zraft_fs_log:get_log_descr(Log),
+
+            ?INFO(InitState, "ConfDescr = ~p    LogDescr = ~p", [ConfDescr,LogDescr] ),
+
+            %% 构造 xxx
             State1 = #state{log = Log,
                 current_term = CurrentTerm,
                 voted_for = VotedFor,
@@ -341,21 +357,30 @@ maybe_set_back_end(NewBackEnd, Meta = #raft_meta{back_end = OldBackEnd}, _Log) w
 maybe_set_back_end(_NewBackEnd, _Meta, _Log) ->
     {error, backend_already_exists}.
 
+
 %%%===================================================================
 %%% Load state
 %%%===================================================================
+%%
+%% 在 load 状态下只处理 bootstrap 动作
+%%
+%% Module:StateName(Event, StateData)
 load(_, State) ->
     {next_state, load, State}.
 
+%% Module:StateName(Event, From, StateData)
+%% From -> a tuple {Pid,Tag}, where Pid is the pid of the process which called sync_send_event/2,3 
+%%         and Tag is a unique tag.
 load(bootstrap, From, State) ->
     case State#init_state.bootstrap of
-        false ->
+        false ->    %% 尚未完成自举
             {next_state, load, State#init_state{bootstrap = From}};
-        _ ->
+        _ ->    %% 将 {error, initialized} 作为 Reply 发给 From 告知已完成自举
             {reply, {error, initialized}, load, State}
     end;
 load(_, _, State) ->
     {next_state, load, State}.
+
 %%%===================================================================
 %%% Follower state
 %%%===================================================================
@@ -524,23 +549,32 @@ handle_event(Info = #snapshot_info{}, StateName, State = #state{log = Log}) ->
             ?ERROR(State, "Fail truncate log ~p", [Error]),
             {stop, {error, snapshot_failed}, State}
     end;
+
+%% 同步 peer 信息
+
+%% 同步 peer 的 index
 handle_event({sync_peer,{sync_index,ConfID,AgreeIndex}}, leader, State=#state{config = #config{id = ConfID}}) ->
     %%log has replicated by peer proxy
     maybe_commit_quorum(AgreeIndex,State);
+
+%% 同步 peer 的 epoch
 handle_event({sync_peer,{sync_epoch,ConfID,Epoch}}, leader, State=#state{config = #config{id = ConfID}}) ->
     %%It's safe now to apply read requests
     State1 = apply_read_requests(Epoch,State),
     {next_state, leader, State1};
+
+%% 同步 peer 的 vote
 handle_event({sync_peer,{sync_vote,ConfID,Vote}},candidate, State=#state{config = #config{id = ConfID}}) ->
-    %%It's safe now to apply read requests
+    %% It's safe now to apply read requests
     maybe_become_leader(Vote,candidate,State);
 handle_event({sync_peer,_}, StateName, State) ->
     {next_state, StateName, State};
+
 handle_event(Req = #read_request{}, leader,
     State = #state{sessions = Sessions, epoch = Epoch}) ->
     #sessions{read = Requests} = Sessions,
     %%First we must ensure that we are leader.
-    %%Change epoch and send hearbeat
+    %%Change epoch and send heartbeat
     %%Reqeust will be processed than quorum will agree that we are leader
     Epoch1 = Epoch + 1,
     Requests1 = [{Epoch1, Req} | Requests],
@@ -625,32 +659,35 @@ handle_sync_event(Req = #read_request_local{args = Args}, From, StateName,
     #read_request_local{function = Function, args = Args} = Req,
     erlang:apply(?MODULE, Function, [State, From | Args]),
     {next_state, StateName, State};
+
 handle_sync_event(Req = #read_request{args = Args}, From, leader,
-    State = #state{sessions = Sessions, epoch = Epoch}) ->
+        State = #state{sessions = Sessions, epoch = Epoch}) ->
     #sessions{read = Requests} = Sessions,
-    %%First we must ensure that we are leader.
-    %%Change epoch and send hearbeat
-    %%Reqeust will be processed than quorum will agree that we are leader
+    %% First we must ensure that we are leader.
+    %% Change epoch and send heartbeat
+    %% Reqeust will be processed than quorum will agree that we are leader
     Epoch1 = Epoch + 1,
     Req1 = Req#read_request{args = [From | Args]},
     Requests1 = [{Epoch1, Req1} | Requests],
     State1 = State#state{epoch = Epoch1, sessions = Sessions#sessions{read = Requests1}},
+    %% 
     ok = update_peer_last_index(State1),
     replicate_peer_request(?OPTIMISTIC_REPLICATE_CMD, State1, []),
     {next_state, leader, State1};
 handle_sync_event(#read_request{}, _From, StateName, State) ->
-    %%Lost lidership
-    %%Hint new leader in respose
+    %% Lost leadership
+    %% Hint new leader in response
     {reply, {leader, current_leader(State)}, StateName, State};
+
 handle_sync_event(Req = #write{}, From, leader, State) ->
-    %%Try replicate new entry.
-    %%Response will be sended after entry will be ready to commit
+    %% Try replicate new entry.
+    %% Response will be sended after entry will be ready to commit
     Entry = new_entry(?OP_DATA,Req#write{from = From},State),
     State1 = append([Entry], State),
     {next_state, leader, State1};
 handle_sync_event(#write{}, _From, StateName, State) ->
-    %%Lost lidership
-    %%Hint new leader in respose
+    %% Lost leadership
+    %% Hint new leader in response
     {reply, {leader, current_leader(State)}, StateName, State};
 handle_sync_event(Req = #conf_change_requet{}, From, leader, State) ->
     change_configuration(Req#conf_change_requet{from = From}, State);
@@ -883,12 +920,12 @@ accept_vote(Req, State) ->
     zraft_peer_route:reply_consensus(From, Reply),
     {next_state, follower, State1}.
 
-is_time_to_elect(#state{last_hearbeat = max}) ->
+is_time_to_elect(#state{last_heartbeat = max}) ->
     false;
-is_time_to_elect(#state{last_hearbeat = undefined}) ->
+is_time_to_elect(#state{last_heartbeat = undefined}) ->
     true;
-is_time_to_elect(#state{last_hearbeat = LastHearbeat, election_timeout = Timeout}) ->
-    timer:now_diff(os:timestamp(), LastHearbeat) >= Timeout.
+is_time_to_elect(#state{last_heartbeat = LastHeartbeat, election_timeout = Timeout}) ->
+    timer:now_diff(os:timestamp(), LastHeartbeat) >= Timeout.
 
 handle_install_snapshot(StateName, Req = #install_snapshot{term = T1, from = From},
     State = #state{current_term = T2}) when T1 < T2 ->
@@ -931,7 +968,7 @@ reject_install_snapshot(Req, State) ->
 install_snapshot(Req, State) ->
     State1 = start_timer(State),
     CurrentTime = os:timestamp(),
-    State2 = State1#state{last_hearbeat = CurrentTime},
+    State2 = State1#state{last_heartbeat = CurrentTime},
     zraft_fsm:cmd(State2#state.state_fsm, Req),
     {next_state, follower, State2}.
 
@@ -1006,7 +1043,7 @@ append_entries(Req, State = #state{log = Log, current_term = Term, id = PeerID})
     end,
     zraft_peer_route:reply_proxy(From, Reply1),
     CurrentTime = os:timestamp(),
-    State3 = start_timer(State2#state{last_hearbeat = CurrentTime}),
+    State3 = start_timer(State2#state{last_heartbeat = CurrentTime}),
     {next_state, follower, State3}.
 
 start_election(State) ->
@@ -1020,7 +1057,7 @@ start_election(State) ->
         log_state = LogState,
         quorum_counter = Counter,
         state_fsm = StateFSM,
-        last_hearbeat = LastHear
+        last_heartbeat = LastHear
     }=State,
     NextTerm = Term + 1,
     #log_descr{last_index = LastIndex, last_term = LastTerm} = LogState,
@@ -1047,7 +1084,8 @@ start_election(State) ->
     State1 = start_timer(State),
     {next_state,candidate,State1#state{current_term = NextTerm, leader = undefined, voted_for = PeerID}}.
 
-%%Check quorum vote
+%% Check quorum vote
+%% FallBackStateName -> candidate
 maybe_become_leader(Vote,FallBackStateName, State) ->
     if
         Vote ->
@@ -1057,15 +1095,16 @@ maybe_become_leader(Vote,FallBackStateName, State) ->
                 quorum_counter = Counter,
                 state_fsm = StateFSM
             } = State,
+
             zraft_fsm:set_state(StateFSM,leader),
             zraft_quorum_counter:set_state(Counter,leader),
             zraft_fs_log:sync(State#state.log),
-            State1 = State#state{leader = MyID, voted_for = MyID, last_hearbeat = max},
-            %%reset election timer
+            State1 = State#state{leader = MyID, voted_for = MyID, last_heartbeat = max},
+            %% reset election timer
             State2 = cancel_timer(State1),
-            %%force hearbeat from new leader. We don't count new commit index.
+            %% force heartbeat from new leader. We don't count new commit index.
             replicate_peer_request(?BECOME_LEADER_CMD, State2, []),
-            %%Add noop entry,it's needed for commit progress
+            %% Add noop entry, it's needed for commit progress
             Noop = new_entry(?OP_NOOP,<<>>,State),
             State3 = append([Noop], State2),
             {next_state, leader, State3};
@@ -1087,21 +1126,21 @@ step_down(PrevState, NewTerm, State) ->
 step_down(NewLeader, SetVoteTo, PrevState, NewTerm,
     State = #state{current_term = OldTerm}) when NewTerm > OldTerm ->
     lost_leadership(PrevState, State),
-    State1 = State#state{allow_commit = false, current_term = NewTerm, leader = NewLeader, last_hearbeat = undefined},
-    State2 = meybe_reset_last_hearbeat(PrevState, State1),
+    State1 = State#state{allow_commit = false, current_term = NewTerm, leader = NewLeader, last_heartbeat = undefined},
+    State2 = meybe_reset_last_heartbeat(PrevState, State1),
     State3 = reset_requests(State2),
     %%reset our vote
     update_vote(SetVoteTo, State3);
 step_down(NewLeader, SetVoteTo, PrevState, _NewTerm, State) ->
     lost_leadership(PrevState, State),
     State1 = maybe_update_vote(SetVoteTo, State),
-    State2 = meybe_reset_last_hearbeat(PrevState, State1),
+    State2 = meybe_reset_last_heartbeat(PrevState, State1),
     State3 = reset_requests(State2),
     State3#state{leader = NewLeader, allow_commit = false}.
 
-meybe_reset_last_hearbeat(leader, State) ->
-    State#state{last_hearbeat = undefined};
-meybe_reset_last_hearbeat(_, State) ->
+meybe_reset_last_heartbeat(leader, State) ->
+    State#state{last_heartbeat = undefined};
+meybe_reset_last_heartbeat(_, State) ->
     State.
 maybe_update_vote(undefined, State) ->
     State;
@@ -1161,6 +1200,7 @@ current_leader(#state{leader = Leader,config = #config{conf = {_,#pconf{old_peer
 current_leader(#state{config = ?BLANK_CONF})->
     undefined.
 
+%% StateName -> follower | leader ，待切换 state
 set_config(_StateName, ?BLANK_CONF, State) ->
     State#state{config = ?BLANK_CONF};
 set_config(_StateName, PConf, State = #state{config = #config{conf = PConf}}) ->
@@ -1169,7 +1209,7 @@ set_config(StateName, {ConfID, #pconf{old_peers = Old, new_peers = New}} = PConf
     State = #state{log_state = LogState, id = PeerID, back_end = BackEnd, peers = OldPeers}) ->
     NewPeersSet = ordsets:union([[PeerID], Old, New]),
     #log_descr{last_index = LastIndex, last_term = LastTerm, commit_index = Commit} = LogState,
-    HearBeat = if
+    Heartbeat = if
                    StateName == leader ->
                        #state{epoch = Epoch, current_term = Term} = State,
                        zraft_log_util:append_request(Epoch, Term, Commit, LastIndex, LastTerm, []);
@@ -1183,7 +1223,7 @@ set_config(StateName, {ConfID, #pconf{old_peers = Old, new_peers = New}} = PConf
                         ?TRANSITIONAL_CONF
                 end,
     zraft_quorum_counter:set_conf(State#state.quorum_counter,PConf,ConfState),
-    NewPeers = join_peers({peer(PeerID),State#state.quorum_counter, BackEnd, HearBeat}, NewPeersSet, OldPeers, []),
+    NewPeers = join_peers({peer(PeerID),State#state.quorum_counter, BackEnd, Heartbeat}, NewPeersSet, OldPeers, []),
     NewConf = #config{id = ConfID, old_peers = Old, new_peers = New, conf = PConf, state = ConfState},
     State#state{config = NewConf, peers = NewPeers}.
 
@@ -1207,14 +1247,14 @@ join_peers(PeerParam, [ID1 | T1], [{ID2, P2} | T2], Acc) when ID1 < ID2 ->
 join_peers(PeerParam, [_ID1 | T1], [{ID2, P2} | T2], Acc) -> %%ID1==ID2
     join_peers(PeerParam, T1, T2, [{ID2, P2} | Acc]).
 
-make_peer({Self,Counter, BackEnd, HearBeat}, PeerID) ->
+make_peer({Self,Counter, BackEnd, Heartbeat}, PeerID) ->
     {MyID, _} = Self,
     {ok, PeerPID} = zraft_peer_proxy:start_link(Self,Counter, PeerID, BackEnd),
     if
-        HearBeat == undefined orelse MyID == PeerID ->
+        Heartbeat == undefined orelse MyID == PeerID ->
             ok;
         true ->
-            zraft_peer_proxy:cmd(PeerPID, {?BECOME_LEADER_CMD, HearBeat})
+            zraft_peer_proxy:cmd(PeerPID, {?BECOME_LEADER_CMD, Heartbeat})
     end,
     {PeerID, PeerPID}.
 
@@ -1309,6 +1349,8 @@ update_peer_last_index(State = #state{epoch = Epoch, log_state = #log_descr{last
 
 update_all_peer(Fun, State) ->
     to_all_peer({?UPDATE_CMD, Fun}, State).
+
+%% 更新指定 peer 的指定信息
 update_peer(Fun, State = #state{id = PeerID}) ->
     update_peer(PeerID, Fun, State).
 update_peer(PeerID, Fun, State) ->
@@ -1343,6 +1385,8 @@ to_all_peer(Cmd, #state{peers = Peers}) ->
     lists:foreach(fun({_, P}) ->
         zraft_peer_proxy:cmd(P, Cmd) end, Peers).
 
+%% 若 PeerID 在 Peers 中存在，则异步调用 zraft_peer_proxy:cmd 执行
+%% Cmd -> 待执行内容，例如 {?UPDATE_CMD, Fun}
 to_peer(_PeerID, _Cmd, #state{peers = []}) ->
     ok;
 to_peer(PeerID, Cmd, #state{peers = Peers}) ->
@@ -1350,6 +1394,7 @@ to_peer(PeerID, Cmd, #state{peers = Peers}) ->
         false ->
             ok;
         {_, P} ->
+            %% P -> zraft_peer_proxy 进程 pid
             zraft_peer_proxy:cmd(P, Cmd)
     end,
     ok.
@@ -1416,11 +1461,11 @@ reset_request(#conf_change_requet{from = From}, Reason) ->
 reset_request(#read_request{args = [From | _]}, Reason) ->
     reply_caller(From, Reason).
 
-%%Query data from state FSM.
+%% Query data from state FSM.
 read_request(#state{state_fsm = FSM}, From,Watcher,Request) ->
     zraft_fsm:cmd(FSM, #read{from = From, request = Request,watch = Watcher,global_time = zraft_util:now_millisec()}).
 
-%%Get last stable configuration
+%% Get last stable configuration
 get_conf_request(#state{log_state = LogState, config = Conf}, From) ->
     #log_descr{commit_index = Commit} = LogState,
     #config{conf = ConfData, id = ConfIndex, state = ConfState} = Conf,
@@ -1487,7 +1532,12 @@ reply_caller(From, Msg) when is_pid(From) ->
 reply_caller(From, Msg) ->
     gen_fsm:reply(From,Msg).
 
+
+
+%% 单元测试
+
 -ifdef(TEST).
+
 setup_node() ->
     zraft_util:set_test_dir("test-data"),
     net_kernel:start(['zraft_test@localhost', shortnames]),

@@ -168,7 +168,7 @@ get_conf(PeerID, Timeout) ->
     end.
 
 -type apply_conf_error() :: leader_changed|not_stable|newer_exists|process_prev_change|timeout.
-%%
+%% set_new_conf(FirstPeer, AllPeers, [FirstPeer], ?CREATE_TIMEOUT)
 -spec set_new_conf(Peer, NewPeers, OldPeers, Timeout) -> Result when
     Peer :: zraft_consensus:peer_id(),
     NewPeers :: list(zraft_consensus:peer_id()),
@@ -177,6 +177,7 @@ get_conf(PeerID, Timeout) ->
     Result :: {ok, list(zraft_consensus:peer_id())}|{error, apply_conf_error()}.
 set_new_conf(PeerID, NewPeers, OldPeers, Timeout) ->
     NewSorted = ordsets:from_list(NewPeers),
+    %% 等待 stable 状态的完成
     case wait_stable_conf(PeerID, Timeout) of
         {ok, {_Leader, _Index, NewSorted}} ->
             {ok, NewPeers};
@@ -257,7 +258,7 @@ create(FirstPeer, AllPeers, UseBackend) ->
             %% 为每个 peer 创建相应的进程组
             case start_peers(UseBackend, AllPeers) of
                 ok ->
-                    %% 令 peer 组中的第一个优先进行初始化
+                    %% 将 peer 组中的第一个 peer 标识为 bootstrap 完成
                     case catch zraft_consensus:initial_bootstrap(FirstPeer) of
                         ok ->
                             set_new_conf(FirstPeer, AllPeers, [FirstPeer], ?CREATE_TIMEOUT);
@@ -394,6 +395,7 @@ peer_execute_sessions(Session, Fun, Start, Timeout) ->
 
 
 %% @private
+%% Timeout -> 毫秒，默认值为 ?CREATE_TIMEOUT
 wait_stable_conf(Peer, Timeout) ->
     wait_stable_conf(Peer,[], os:timestamp(), Timeout).
 
@@ -402,7 +404,7 @@ wait_stable_conf(Peer,FallBack, Start, Timeout) ->
     case zraft_util:is_expired(Start, Timeout) of
         true ->
             {error, timeout};
-        {false, _Timeout1} ->
+        {false, _Timeout1} ->   %% 尚未超时
             case catch zraft_consensus:get_conf(Peer, Timeout) of
                 {leader, undefined} ->
                     timer:sleep(zraft_consensus:get_election_timeout()),

@@ -67,14 +67,14 @@
     sessions,
     watchers,
     monitors,
-    ustate,
+    ustate,                 %% dict
     back_end,
     last_index = 0,
     last_snapshot_index = 0,
     log_count = 0,
     max_count,              %% 触发快照/日志切割的 entry 阈值，默认 1000
     active_snapshot,
-    dir,
+    dir,                    %% 例如 "data/629EWAR87JDBH7W4R88E3MWTA/snapshots"
     snapshot_count = 0,
     last = 0,
     last_dir = [],
@@ -87,6 +87,7 @@ start_link(Raft, BackEnd) ->
     gen_server:start_link(?MODULE, [Raft, BackEnd], []).
 
 %% 设置 Raft 状态
+%% StateName -> leader | xxx
 -spec set_state(pid(), atom()) -> ok.
 set_state(P, StateName) ->
     gen_server:cast(P, {set_state, StateName}).

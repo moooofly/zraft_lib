@@ -76,16 +76,16 @@
 -define(MAX_SEGMENT_SIZE, zraft_util:get_env(max_segment_size, 10485760)).  %% 10 MB
 %% 日志同步模式
 -define(SYNC_MODE,zraft_util:get_env(log_sync_mode,?SYNC_DEFAULT_MODE)).    %% avaible options: default,dirty,leader_dirty
--define(READ_BUFFER_SIZE, 1048576).%%1MB
+-define(READ_BUFFER_SIZE, 1048576). %% 1MB
 -define(SERVER, ?MODULE).
 
 -record(segment, {
-    firt_index,
-    last_index,
-    fname,
-    fd,
+    firt_index,         %%
+    last_index,         %%
+    fname,              %% "data/629EWAR87JDBH7W4R88E3MWTA/log/12-12.rlog"
+    fd,                 %% {file_descriptor,prim_file,{#Port<0.4774>,748}} | undefined
     size = 1,
-    entries = []
+    entries = []        %% [{entry,12,12,3,<<>>,1456131631856}]
 }).
 -record(meta, {
     version,
@@ -195,6 +195,7 @@ init([PeerID]) ->
 
 %% ???
 load_fs(PeerID) ->
+    lager:info("[zraft_fs_log:~p] load_fs...", [self()]),
     PeerDirName = zraft_util:peer_name_to_dir_name(zraft_util:peer_name(PeerID)),
     %% data/629EWAR87JDBH7W4R88E3MWTA
     PeerDir = filename:join([?DATA_DIR, PeerDirName]),
@@ -656,6 +657,7 @@ write_to_file(Index, BufferSize, Buffer, Segment = #segment{fd = FD, size = Size
 
 
 load_fs_log(FS = #fs{log_dir = Dir, first_index = Index}) ->
+    lager:info("[zraft_fs_log:~p] load_fs_log...", [self()]),
     {ok, Files} = file:list_dir(Dir),
     Segments = load_segments_file(Files, FS, []),
     load_segments_data(Index, Segments, FS, [], []).
@@ -711,7 +713,7 @@ load_segments_file([], _, Acc) ->
 load_segments_file([SName | Tail], FS = #fs{log_dir = Dir}, Acc) ->
     FName = filename:join(Dir, SName),
     case is_open_filename(SName) of
-        true ->
+        true -> %% 对应 open-xx.rlog 文件
             case open_file_index(SName) of
                 {error, _} ->
                     lager:warning("Log contains bad file ~s", [FName]),
@@ -723,7 +725,7 @@ load_segments_file([SName | Tail], FS = #fs{log_dir = Dir}, Acc) ->
                         [#segment{firt_index = {open, I}, last_index = hi, fname = FName} | Acc]
                     )
             end;
-        _ ->
+        _ ->    %% 对应 xx-xx.rlog 文件
             case segment_bound(SName) of
                 {error, _} ->
                     lager:warning("Log contains bad file ~s", [FName]),
@@ -733,11 +735,13 @@ load_segments_file([SName | Tail], FS = #fs{log_dir = Dir}, Acc) ->
             end
     end.
 
+%% 判定是否为 open-xx.rlog 文件
 is_open_filename([$o, $p, $e, $n, $- | _T]) ->
     true;
 is_open_filename(_) ->
     false.
 
+%% 获取 open 文件的索引值，例如 open-1.rlog 的索引为 1
 open_file_index(Name) ->
     Name2 = filename:rootname(Name, ".rlog"),
     case Name2 of
@@ -751,6 +755,8 @@ open_file_index(Name) ->
         _ ->
             {error, badname}
     end.
+
+%% 获取文件的分段边界值，例如，由 9-9.rlog 可以得到 {9,9}
 segment_bound(Name) ->
     Name2 = filename:rootname(Name, ".rlog"),
     case string:tokens(Name2, "-") of
@@ -772,6 +778,8 @@ segment_bound(Name) ->
 
 
 load_file(Lo, Hi, FName, LogAcc, ConfAcc) ->
+    lager:info("[zraft_fs_log:~p] load_file start...", [self()]),
+    %% [Note] read_ahead 作用
     {ok, FD} = file:open(FName, [read, binary, {read_ahead, ?READ_BUFFER_SIZE}]),
     Result = case file:read(FD, 1) of
                  {ok, <<?SEGMENT_VERSION:8>>} ->
@@ -788,6 +796,9 @@ load_file(Lo, Hi, FName, LogAcc, ConfAcc) ->
     file:close(FD),
     Result.
 
+%% PIndex -> integer()
+%% FName -> 例如 data/629EWAR87JDBH7W4R88E3MWTA/log/open-1.rlog
+%% 
 read_entries(PIndex, Lo, Hi, FName, FD, Acc, Conf) ->
     case file:read(FD, 9) of
         {ok, <<?RECORD_START:8, Crs:32, Size:32>>} ->
@@ -799,13 +810,15 @@ read_entries(PIndex, Lo, Hi, FName, FD, Acc, Conf) ->
                 {stop, Entry} ->
                     {ok, {PIndex, [Entry | Acc], maybe_add_conf(Entry, Conf)}};
                 {error, Error} ->
-                    lager:error("Can't read entry from ~s at ~p: ~p", [FName, PIndex, Error]),
+                    lager:error("[zraft_fs_log:~p][1] Can't read entry from ~s at ~p: ~p", 
+                        [self(), FName, PIndex, Error]),
                     {error, {PIndex - 1, Acc, Conf}}
             end;
         eof ->
             {ok, {PIndex - 1, Acc, Conf}};
         {error, Error} ->
-            lager:error("Can't read entry from ~s at ~p: ~p", [FName, PIndex, Error]),
+            lager:error("[zraft_fs_log:~p][2] Can't read entry from ~s at ~p: ~p", 
+                [self(), FName, PIndex, Error]),
             {error, {PIndex - 1, Acc, Conf}}
     end.
 
@@ -870,6 +883,7 @@ update_metadata(FS = #fs{meta_version = Version, first_index = Index, peer_dir =
 
 %% 根据 meta2.info 和 meta1.info 的内容加载 raft 元数据
 load_meta(FS = #fs{peer_dir = Dir,peer_id = ID}) ->
+    lager:info("[zraft_fs_log:~p] load_meta...", [self()]),
     Meta2 = #meta{version = V2} = case read_meta_file(filename:join(Dir, "meta2.info")) of
                                       {error, _} ->
                                           #meta{version = 1, first = 1, raft_meta = #raft_meta{id = ID}};

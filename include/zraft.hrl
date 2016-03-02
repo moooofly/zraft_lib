@@ -69,8 +69,8 @@
 -record(peer,{id,next_index=1,has_vote=false,last_agree_index=0,epoch=0}).
 
 %% first_index  -> interger()
-%% last_index   -> interger()
-%% last_term    -> interger()
+%% last_index   -> interger() 创建 snapshot 时所覆盖的最后一条 commited log entry 的 log index
+%% last_term    -> interger() last_index 对应 log entry 的 term id
 %% commit_index -> interger()
 -record(log_descr,{first_index,last_index,last_term,commit_index}).
 
